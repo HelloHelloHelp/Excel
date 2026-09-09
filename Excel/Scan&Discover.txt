@@ -12,3 +12,28 @@ react/html/css - til forsiden
 api - til at hente information fra internettet
 OCR - til at genkende tekst på objekter, hvis nødvendigt
 pillow - til at håndtere billeder i python
+
+
+📱 Phone
+   ↓
+Open website
+   ↓
+Press "Scan"
+   ↓
+Phone camera
+   ↓
+Take picture
+   ↓
+Upload image
+   ↓
+☁️ Your server
+   ↓
+OpenCV / AI
+   ↓
+"Faxe Kondi can"
+   ↓
+Search online
+   ↓
+SQL database
+   ↓
+📱 Result on phone
