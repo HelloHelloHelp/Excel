@@ -37,3 +37,6 @@ Search online
 SQL database
    ↓
 📱 Result on phone
+
+
+server - Render
