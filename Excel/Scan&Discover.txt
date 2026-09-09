@@ -1,0 +1,14 @@
+projekt - scan & discover:
+man scanner en ting, så er prorammet gemmer infoen i en sql database(hvad tingen hedder, hvornår blev lavet, af hvem, hvilken land) uden at have brug for at tage en foto af navnet.
+den skal eksempel genkende en faxe kondi dåse uden navnet på dåsen, men ved at scanne formen og søge efter den på internettet, og derefter gemme informationen i databasen. 
+Programmet skal kunne genkende forskellige objekter og deres former, og derefter finde relevante oplysninger om dem online.
+
+python - kodesprog
+openCV - til billedgenkendelse
+YOLO - til objektgenkendelse
+FastApi - python backendAPI
+sql - til database
+react/html/css - til forsiden
+api - til at hente information fra internettet
+OCR - til at genkende tekst på objekter, hvis nødvendigt
+pillow - til at håndtere billeder i python
