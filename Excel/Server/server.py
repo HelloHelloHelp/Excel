@@ -11,6 +11,7 @@ def home():
     return """
     <!DOCTYPE html>
     <html lang="en">
+
     <head>
         <meta charset="UTF-8">
 
@@ -22,6 +23,7 @@ def home():
         <title>Scan & Discover</title>
 
         <style>
+
             body {
                 font-family: Arial, sans-serif;
                 text-align: center;
@@ -56,13 +58,20 @@ def home():
                 color: white;
             }
 
+            #stopButton {
+                background: #e74c3c;
+                color: white;
+            }
+
             #scanButton {
                 background: #3498db;
                 color: white;
             }
 
-            #scanButton:disabled {
-                background: #555;
+            button:disabled {
+                background: #555 !important;
+                color: #aaa;
+                cursor: not-allowed;
             }
 
             #result {
@@ -76,18 +85,40 @@ def home():
             canvas {
                 display: none;
             }
+
         </style>
+
     </head>
+
 
     <body>
 
         <h1>Scan & Discover</h1>
 
-        <button id="startButton" onclick="startCamera()">
+
+        <!-- CAMERA BUTTONS -->
+
+        <button
+            id="startButton"
+            onclick="startCamera()"
+        >
             Start Camera
         </button>
 
+
+        <button
+            id="stopButton"
+            onclick="stopCamera()"
+            disabled
+        >
+            Stop Camera
+        </button>
+
+
         <br>
+
+
+        <!-- CAMERA -->
 
         <video
             id="camera"
@@ -95,7 +126,11 @@ def home():
             playsinline
         ></video>
 
+
         <br>
+
+
+        <!-- SCAN -->
 
         <button
             id="scanButton"
@@ -105,66 +140,195 @@ def home():
             Scan
         </button>
 
+
         <canvas id="canvas"></canvas>
+
 
         <div id="result">
             Press "Start Camera" to begin.
         </div>
 
+
         <script>
 
             let stream = null;
+
+
+            // ==========================================
+            // START CAMERA
+            // ==========================================
 
             async function startCamera() {
 
                 try {
 
                     stream = await navigator.mediaDevices.getUserMedia({
+
                         video: {
                             facingMode: {
                                 ideal: "environment"
                             }
                         },
+
                         audio: false
+
                     });
 
-                    const video = document.getElementById("camera");
+
+                    const video =
+                        document.getElementById("camera");
+
 
                     video.srcObject = stream;
 
-                    document.getElementById("scanButton").disabled = false;
 
-                    document.getElementById("result").innerText =
+                    // Enable buttons
+
+                    document.getElementById(
+                        "scanButton"
+                    ).disabled = false;
+
+
+                    document.getElementById(
+                        "stopButton"
+                    ).disabled = false;
+
+
+                    document.getElementById(
+                        "startButton"
+                    ).disabled = true;
+
+
+                    document.getElementById(
+                        "result"
+                    ).innerText =
                         "Camera started. Point it at something and press Scan.";
+
 
                 } catch (error) {
 
                     console.error(error);
 
-                    document.getElementById("result").innerText =
+
+                    document.getElementById(
+                        "result"
+                    ).innerText =
                         "Could not access the camera. Please allow camera permission.";
 
                 }
+
             }
 
 
+            // ==========================================
+            // STOP CAMERA
+            // ==========================================
+
+            function stopCamera() {
+
+                if (stream) {
+
+                    stream
+                        .getTracks()
+                        .forEach(function(track) {
+
+                            track.stop();
+
+                        });
+
+
+                    stream = null;
+
+                }
+
+
+                // Remove camera stream from video
+
+                const video =
+                    document.getElementById("camera");
+
+                video.srcObject = null;
+
+
+                // Disable Scan and Stop
+
+                document.getElementById(
+                    "scanButton"
+                ).disabled = true;
+
+
+                document.getElementById(
+                    "stopButton"
+                ).disabled = true;
+
+
+                // Enable Start
+
+                document.getElementById(
+                    "startButton"
+                ).disabled = false;
+
+
+                document.getElementById(
+                    "result"
+                ).innerText =
+                    "Camera stopped.";
+
+            }
+
+
+            // ==========================================
+            // SCAN IMAGE
+            // ==========================================
+
             async function scanImage() {
 
-                const video = document.getElementById("camera");
-                const canvas = document.getElementById("canvas");
+                if (!stream) {
 
-                if (!video.videoWidth || !video.videoHeight) {
+                    document.getElementById(
+                        "result"
+                    ).innerText =
+                        "Please start the camera first.";
 
-                    document.getElementById("result").innerText =
+                    return;
+
+                }
+
+
+                const video =
+                    document.getElementById("camera");
+
+
+                const canvas =
+                    document.getElementById("canvas");
+
+
+                if (
+                    !video.videoWidth ||
+                    !video.videoHeight
+                ) {
+
+                    document.getElementById(
+                        "result"
+                    ).innerText =
                         "Camera is not ready yet.";
 
                     return;
+
                 }
+
+
+                // Set canvas size to camera image
 
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
 
-                const context = canvas.getContext("2d");
+
+                const context =
+                    canvas.getContext("2d");
+
+
+                // Capture current camera frame
 
                 context.drawImage(
                     video,
@@ -174,49 +338,98 @@ def home():
                     canvas.height
                 );
 
-                document.getElementById("result").innerText =
+
+                document.getElementById(
+                    "result"
+                ).innerText =
                     "Scanning...";
 
-                canvas.toBlob(async function(blob) {
 
-                    const formData = new FormData();
+                // Convert image to JPEG
 
-                    formData.append("file", blob, "camera.jpg");
+                canvas.toBlob(
+                    async function(blob) {
 
-                    try {
+                        if (!blob) {
 
-                        const response = await fetch("/scan", {
-                            method: "POST",
-                            body: formData
-                        });
+                            document.getElementById(
+                                "result"
+                            ).innerText =
+                                "Could not capture image.";
 
-                        const data = await response.json();
+                            return;
 
-                        if (data.success) {
-
-                            document.getElementById("result").innerText =
-                                data.message;
-
-                        } else {
-
-                            document.getElementById("result").innerText =
-                                "Scan failed: " + data.message;
                         }
 
-                    } catch (error) {
 
-                        console.error(error);
+                        const formData =
+                            new FormData();
 
-                        document.getElementById("result").innerText =
-                            "Could not connect to the server.";
-                    }
 
-                }, "image/jpeg", 0.90);
+                        formData.append(
+                            "file",
+                            blob,
+                            "camera.jpg"
+                        );
+
+
+                        try {
+
+                            const response =
+                                await fetch(
+                                    "/scan",
+                                    {
+                                        method: "POST",
+                                        body: formData
+                                    }
+                                );
+
+
+                            const data =
+                                await response.json();
+
+
+                            if (data.success) {
+
+                                document.getElementById(
+                                    "result"
+                                ).innerText =
+                                    data.message;
+
+                            } else {
+
+                                document.getElementById(
+                                    "result"
+                                ).innerText =
+                                    "Scan failed: " +
+                                    data.message;
+
+                            }
+
+
+                        } catch (error) {
+
+                            console.error(error);
+
+
+                            document.getElementById(
+                                "result"
+                            ).innerText =
+                                "Could not connect to the server.";
+
+                        }
+
+                    },
+                    "image/jpeg",
+                    0.90
+                );
+
             }
 
         </script>
 
     </body>
+
     </html>
     """
 
@@ -239,7 +452,10 @@ async def scan(file: UploadFile = File(...)):
 
         print("Scan error:", error)
 
-        return JSONResponse({
-            "success": False,
-            "message": "Could not process the image."
-        }, status_code=500)
+        return JSONResponse(
+            {
+                "success": False,
+                "message": "Could not process the image."
+            },
+            status_code=500
+        )

@@ -39,4 +39,4 @@ SQL database
 📱 Result on phone
 
 
-server - Render
+server - Render - https://scananddiscover.onrender.com/
