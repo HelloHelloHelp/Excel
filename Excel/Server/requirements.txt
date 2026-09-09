@@ -1,7 +1,9 @@
 fastapi
 uvicorn
-opencv-python
+python-multipart
+opencv-python-headless
+numpy
 sqlalchemy
 requests
 pillow
-pytesseract
+pytest
