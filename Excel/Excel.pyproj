@@ -23,13 +23,16 @@
   <ItemGroup>
     <Compile Include="camera.py" />
     <Compile Include="Main.py" />
-    <Compile Include="server.py">
+    <Compile Include="Server\server.py">
       <SubType>Code</SubType>
     </Compile>
   </ItemGroup>
   <ItemGroup>
     <Content Include="Scan&amp;Discover.txt" />
-    <Content Include="requirements.txt" />
+    <Content Include="Server\requirements.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Folder Include="Server\" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in
