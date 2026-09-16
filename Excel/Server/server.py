@@ -1,4 +1,3 @@
-python
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -23,6 +22,7 @@ async def home():
 
 @app.post("/scan")
 async def scan(file: UploadFile = File(...)):
+
     try:
         image_data = await file.read()
 
@@ -40,6 +40,7 @@ async def scan(file: UploadFile = File(...)):
         })
 
     except Exception as error:
+
         print("SCAN ERROR:", error)
 
         return JSONResponse({
@@ -49,10 +50,11 @@ async def scan(file: UploadFile = File(...)):
 
 
 # ============================================================
-# RENDER STARTUP
+# LOCAL STARTUP
 # ============================================================
 
 if __name__ == "__main__":
+
     import uvicorn
 
     uvicorn.run(

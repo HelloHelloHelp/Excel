@@ -1,11 +1,7 @@
-python
 import cv2
 import numpy as np
-from PIL import Image
-
 from ultralytics import YOLO
 
-import io
 import requests
 import easyocr
 
@@ -14,12 +10,18 @@ import easyocr
 # AI MODELS
 # ============================================================
 
+print("Loading YOLO model...")
+
 model = YOLO("yolo11n.pt")
+
+print("Loading OCR...")
 
 ocr_reader = easyocr.Reader(
     ["en"],
     gpu=False
 )
+
+print("AI models loaded.")
 
 
 # ============================================================
@@ -27,12 +29,15 @@ ocr_reader = easyocr.Reader(
 # ============================================================
 
 def read_text(image):
+
     try:
+
         results = ocr_reader.readtext(image)
 
         text_parts = []
 
         for detection in results:
+
             text = detection[1]
             confidence = detection[2]
 
@@ -42,7 +47,9 @@ def read_text(image):
         return " ".join(text_parts).strip()
 
     except Exception as error:
+
         print("OCR error:", error)
+
         return ""
 
 
@@ -51,9 +58,6 @@ def read_text(image):
 # ============================================================
 
 def search_wikipedia(search_text):
-    """
-    Search Wikipedia for the identified object.
-    """
 
     url = "https://en.wikipedia.org/w/api.php"
 
@@ -155,10 +159,6 @@ def get_wikipedia_page(title):
 # ============================================================
 
 def get_wikidata_information(wikidata_id):
-    """
-    Get creator/inventor and date information
-    from Wikidata.
-    """
 
     if not wikidata_id:
         return {}
@@ -194,7 +194,6 @@ def get_wikidata_information(wikidata_id):
         {}
     )
 
-
     # ========================================================
     # DATE
     # P571 = inception
@@ -205,6 +204,7 @@ def get_wikidata_information(wikidata_id):
     if "P571" in claims:
 
         try:
+
             value = claims["P571"][0][
                 "mainsnak"
             ]["datavalue"]["value"]["time"]
@@ -214,11 +214,10 @@ def get_wikidata_information(wikidata_id):
         except Exception:
             pass
 
-
     # ========================================================
     # CREATOR
     # P170 = creator
-    # P61  = discoverer/inventor
+    # P61 = discoverer/inventor
     # ========================================================
 
     person_id = None
@@ -239,7 +238,6 @@ def get_wikidata_information(wikidata_id):
 
             except Exception:
                 pass
-
 
     person_name = None
 
@@ -282,7 +280,6 @@ def get_wikidata_information(wikidata_id):
         except Exception:
             pass
 
-
     return {
         "year": year,
         "creator": person_name
@@ -294,19 +291,11 @@ def get_wikidata_information(wikidata_id):
 # ============================================================
 
 def identify_object(ocr_text, yolo_objects):
-    """
-    Try to identify the actual object.
-
-    OCR gets priority because text such as a brand,
-    product name or model number is much more specific
-    than a generic YOLO class.
-    """
 
     search_text = ""
 
-
     # ========================================================
-    # OCR TEXT
+    # OCR
     # ========================================================
 
     if ocr_text:
@@ -326,7 +315,6 @@ def identify_object(ocr_text, yolo_objects):
                 lines[:5]
             )
 
-
     # ========================================================
     # YOLO FALLBACK
     # ========================================================
@@ -337,16 +325,13 @@ def identify_object(ocr_text, yolo_objects):
             yolo_objects[:3]
         )
 
-
     if not search_text:
         return None
-
 
     print(
         "Searching Wikipedia for:",
         search_text
     )
-
 
     try:
 
@@ -357,7 +342,6 @@ def identify_object(ocr_text, yolo_objects):
         if not title:
             return None
 
-
         page = get_wikipedia_page(
             title
         )
@@ -365,11 +349,9 @@ def identify_object(ocr_text, yolo_objects):
         if not page:
             return None
 
-
         wikidata = get_wikidata_information(
             page.get("wikidata_id")
         )
-
 
         return {
             "name": page.get("title"),
@@ -386,7 +368,6 @@ def identify_object(ocr_text, yolo_objects):
                 "creator"
             )
         }
-
 
     except Exception as error:
 
@@ -419,10 +400,10 @@ def process_image(image_data):
     )
 
     if frame is None:
+
         raise ValueError(
             "Could not decode image."
         )
-
 
     print(
         "Image received successfully."
@@ -432,7 +413,6 @@ def process_image(image_data):
         "Original image size:",
         frame.shape
     )
-
 
     # ========================================================
     # REDUCE LARGE PHONE IMAGES
@@ -461,12 +441,10 @@ def process_image(image_data):
             interpolation=cv2.INTER_AREA
         )
 
-
     print(
         "Image size after resizing:",
         frame.shape
     )
-
 
     # ========================================================
     # YOLO
@@ -475,7 +453,6 @@ def process_image(image_data):
     results = model(frame)
 
     yolo_objects = []
-
 
     for result in results:
 
@@ -487,7 +464,6 @@ def process_image(image_data):
 
             if confidence < 0.40:
                 continue
-
 
             class_id = int(
                 box.cls[0]
@@ -501,7 +477,6 @@ def process_image(image_data):
                 name
             )
 
-
     # ========================================================
     # REMOVE DUPLICATES
     # ========================================================
@@ -512,12 +487,10 @@ def process_image(image_data):
         )
     )
 
-
     print(
         "YOLO:",
         yolo_objects
     )
-
 
     # ========================================================
     # OCR
@@ -527,12 +500,10 @@ def process_image(image_data):
         frame
     )
 
-
     print(
         "OCR:",
         ocr_text
     )
-
 
     # ========================================================
     # INFORMATION LOOKUP
@@ -543,13 +514,11 @@ def process_image(image_data):
         yolo_objects
     )
 
-
     # ========================================================
     # BUILD RESULT
     # ========================================================
 
     lines = []
-
 
     # ========================================================
     # OBJECTS
@@ -569,7 +538,6 @@ def process_image(image_data):
 
         lines.append("")
 
-
     # ========================================================
     # OCR
     # ========================================================
@@ -586,7 +554,6 @@ def process_image(image_data):
 
         lines.append("")
 
-
     # ========================================================
     # INFORMATION
     # ========================================================
@@ -601,13 +568,11 @@ def process_image(image_data):
             f"Name: {information['name']}"
         )
 
-
         if information.get("year"):
 
             lines.append(
                 f"Year: {information['year']}"
             )
-
 
         if information.get("creator"):
 
@@ -616,9 +581,7 @@ def process_image(image_data):
                 + information["creator"]
             )
 
-
         lines.append("")
-
 
         if information.get("history"):
 
@@ -630,7 +593,6 @@ def process_image(image_data):
                 information["history"]
             )
 
-
     else:
 
         lines.append(
@@ -639,11 +601,9 @@ def process_image(image_data):
             "this object."
         )
 
-
     message = "\n".join(
         lines
     )
-
 
     return {
         "message": message,
