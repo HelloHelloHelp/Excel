@@ -8,3 +8,4 @@ requests
 pillow
 pytest
 ultralytics
+pytesseract

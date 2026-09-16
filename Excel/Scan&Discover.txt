@@ -7,11 +7,11 @@ python - kodesprog
 openCV - til billedgenkendelse
 YOLO - til objektgenkendelse
 FastApi - python backendAPI
-sql - til database
-react/html/css - til forsiden
 api - til at hente information fra internettet
 OCR - til at genkende tekst på objekter, hvis nødvendigt
 pillow - til at håndtere billeder i python
+sql - til database
+react/html/css - til forsiden
 
 
 📱 Phone
