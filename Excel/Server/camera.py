@@ -1,4 +1,4 @@
-```python
+python
 import cv2
 import numpy as np
 from PIL import Image
@@ -651,4 +651,3 @@ def process_image(image_data):
         "ocr": ocr_text,
         "information": information
     }
-```
