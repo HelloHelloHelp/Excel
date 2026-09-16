@@ -1,47 +1,34 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import HTMLResponse, JSONResponse
-
-from camera import process_image
-
+from fastapi.responses import HTMLResponse
+import cv2
+import numpy as np
+from ultralytics import YOLO
 
 app = FastAPI(title="Scan & Discover")
 
+# Load YOLO once when the server starts
+model = YOLO("yolo11n.pt")
+
 
 @app.get("/", response_class=HTMLResponse)
-def home():
-
+async def home():
     return """
     <!DOCTYPE html>
-
-    <html lang="en">
-
+    <html>
     <head>
-
-        <meta charset="UTF-8">
-
-        <meta
-            name="viewport"
-            content="width=device-width, initial-scale=1.0"
-        >
-
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Scan & Discover</title>
 
         <style>
-
             body {
-                font-family: Arial, sans-serif;
-                text-align: center;
-                margin: 0;
-                padding: 20px;
                 background: #111;
                 color: white;
+                font-family: Arial;
+                text-align: center;
+                padding: 20px;
             }
 
-            h1 {
-                margin-bottom: 20px;
-            }
-
-            #camera {
+            video {
                 width: 100%;
                 max-width: 600px;
                 border-radius: 12px;
@@ -49,156 +36,97 @@ def home():
             }
 
             button {
+                padding: 15px 25px;
                 margin: 10px;
-                padding: 14px 24px;
-                font-size: 16px;
                 border: none;
                 border-radius: 8px;
-                cursor: pointer;
+                font-size: 16px;
             }
 
-            #startButton {
+            #start {
                 background: #2ecc71;
                 color: white;
             }
 
-            #stopButton {
-                background: #e74c3c;
-                color: white;
-            }
-
-            #scanButton {
+            #scan {
                 background: #3498db;
                 color: white;
             }
 
-            button:disabled {
-                background: #555 !important;
-                color: #aaa;
-                cursor: not-allowed;
+            #stop {
+                background: #e74c3c;
+                color: white;
             }
 
             #result {
                 margin: 20px auto;
-                max-width: 600px;
                 padding: 15px;
-                border-radius: 8px;
+                max-width: 600px;
                 background: #222;
+                border-radius: 8px;
             }
-
-            canvas {
-                display: none;
-            }
-
         </style>
-
     </head>
 
     <body>
 
         <h1>Scan & Discover</h1>
 
-        <button
-            id="startButton"
-            onclick="startCamera()"
-        >
+        <button id="start" onclick="startCamera()">
             Start Camera
         </button>
 
-        <button
-            id="stopButton"
-            onclick="stopCamera()"
-            disabled
-        >
-            Stop Camera
-        </button>
-
-        <br>
-
-        <video
-            id="camera"
-            autoplay
-            playsinline
-        ></video>
-
-        <br>
-
-        <button
-            id="scanButton"
-            onclick="scanImage()"
-            disabled
-        >
+        <button id="scan" onclick="scan()" disabled>
             Scan
         </button>
 
-        <canvas id="canvas"></canvas>
+        <button id="stop" onclick="stopCamera()" disabled>
+            Stop Camera
+        </button>
+
+        <br><br>
+
+        <video id="video" autoplay playsinline></video>
+
+        <canvas id="canvas" style="display:none;"></canvas>
 
         <div id="result">
-            Press "Start Camera" to begin.
+            Start the camera.
         </div>
-
 
         <script>
 
             let stream = null;
 
-
             async function startCamera() {
 
                 try {
 
-                    stream =
-                        await navigator.mediaDevices.getUserMedia({
+                    stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            facingMode: "environment"
+                        },
+                        audio: false
+                    });
 
-                            video: {
-                                facingMode: {
-                                    ideal: "environment"
-                                }
-                            },
-
-                            audio: false
-
-                        });
-
-
-                    const video =
-                        document.getElementById("camera");
+                    const video = document.getElementById("video");
 
                     video.srcObject = stream;
 
+                    document.getElementById("scan").disabled = false;
+                    document.getElementById("stop").disabled = false;
+                    document.getElementById("start").disabled = true;
 
-                    document.getElementById(
-                        "scanButton"
-                    ).disabled = false;
-
-
-                    document.getElementById(
-                        "stopButton"
-                    ).disabled = false;
-
-
-                    document.getElementById(
-                        "startButton"
-                    ).disabled = true;
-
-
-                    document.getElementById(
-                        "result"
-                    ).innerText =
-                        "Camera started. Point it at something and press Scan.";
-
+                    document.getElementById("result").innerText =
+                        "Camera ready. Point at an object and press Scan.";
 
                 } catch (error) {
 
                     console.error(error);
 
-                    document.getElementById(
-                        "result"
-                    ).innerText =
-                        "Could not access the camera. Please allow camera permission.";
-
+                    document.getElementById("result").innerText =
+                        "Camera error: " + error.message;
                 }
-
             }
 
 
@@ -206,91 +134,37 @@ def home():
 
                 if (stream) {
 
-                    stream
-                        .getTracks()
-                        .forEach(function(track) {
-
-                            track.stop();
-
-                        });
+                    stream.getTracks().forEach(
+                        track => track.stop()
+                    );
 
                     stream = null;
-
                 }
 
+                document.getElementById("video").srcObject = null;
 
-                const video =
-                    document.getElementById("camera");
+                document.getElementById("scan").disabled = true;
+                document.getElementById("stop").disabled = true;
+                document.getElementById("start").disabled = false;
 
-                video.srcObject = null;
-
-
-                document.getElementById(
-                    "scanButton"
-                ).disabled = true;
-
-
-                document.getElementById(
-                    "stopButton"
-                ).disabled = true;
-
-
-                document.getElementById(
-                    "startButton"
-                ).disabled = false;
-
-
-                document.getElementById(
-                    "result"
-                ).innerText =
+                document.getElementById("result").innerText =
                     "Camera stopped.";
-
             }
 
 
-            async function scanImage() {
+            async function scan() {
 
                 if (!stream) {
-
-                    document.getElementById(
-                        "result"
-                    ).innerText =
-                        "Please start the camera first.";
-
                     return;
-
                 }
 
-
-                const video =
-                    document.getElementById("camera");
-
-                const canvas =
-                    document.getElementById("canvas");
-
-
-                if (
-                    !video.videoWidth ||
-                    !video.videoHeight
-                ) {
-
-                    document.getElementById(
-                        "result"
-                    ).innerText =
-                        "Camera is not ready yet.";
-
-                    return;
-
-                }
-
+                const video = document.getElementById("video");
+                const canvas = document.getElementById("canvas");
 
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
 
-
-                const context =
-                    canvas.getContext("2d");
-
+                const context = canvas.getContext("2d");
 
                 context.drawImage(
                     video,
@@ -300,95 +174,45 @@ def home():
                     canvas.height
                 );
 
-
-                document.getElementById(
-                    "result"
-                ).innerText =
+                document.getElementById("result").innerText =
                     "Scanning...";
 
+                canvas.toBlob(async function(blob) {
 
-                canvas.toBlob(
-                    async function(blob) {
+                    const formData = new FormData();
 
-                        if (!blob) {
+                    formData.append(
+                        "file",
+                        blob,
+                        "camera.jpg"
+                    );
 
-                            document.getElementById(
-                                "result"
-                            ).innerText =
-                                "Could not capture image.";
+                    try {
 
-                            return;
+                        const response = await fetch("/scan", {
+                            method: "POST",
+                            body: formData
+                        });
 
-                        }
+                        const data = await response.json();
 
+                        document.getElementById("result").innerText =
+                            data.message;
 
-                        const formData =
-                            new FormData();
+                    } catch (error) {
 
+                        console.error(error);
 
-                        formData.append(
-                            "file",
-                            blob,
-                            "camera.jpg"
-                        );
+                        document.getElementById("result").innerText =
+                            "Server error.";
+                    }
 
-
-                        try {
-
-                            const response =
-                                await fetch(
-                                    "/scan",
-                                    {
-                                        method: "POST",
-                                        body: formData
-                                    }
-                                );
-
-
-                            const data =
-                                await response.json();
-
-
-                            if (data.success) {
-
-                                document.getElementById(
-                                    "result"
-                                ).innerText =
-                                    data.message;
-
-                            } else {
-
-                                document.getElementById(
-                                    "result"
-                                ).innerText =
-                                    "Scan failed: " +
-                                    data.message;
-
-                            }
-
-
-                        } catch (error) {
-
-                            console.error(error);
-
-                            document.getElementById(
-                                "result"
-                            ).innerText =
-                                "Could not connect to the server.";
-
-                        }
-
-                    },
-                    "image/jpeg",
-                    0.90
-                );
-
+                }, "image/jpeg", 0.85);
             }
 
         </script>
 
     </body>
-
     </html>
     """
 
@@ -400,21 +224,62 @@ async def scan(file: UploadFile = File(...)):
 
         image_data = await file.read()
 
-        result = process_image(image_data)
+        # Convert uploaded image to NumPy
+        image_array = np.frombuffer(
+            image_data,
+            dtype=np.uint8
+        )
 
-        return JSONResponse({
+        # Decode with OpenCV
+        frame = cv2.imdecode(
+            image_array,
+            cv2.IMREAD_COLOR
+        )
+
+        if frame is None:
+            return {
+                "success": False,
+                "message": "Could not decode image."
+            }
+
+        print("Image received:", frame.shape)
+
+        # YOLO detection
+        results = model(frame)
+
+        detected = []
+
+        for result in results:
+
+            for box in result.boxes:
+
+                class_id = int(box.cls[0])
+                confidence = float(box.conf[0])
+
+                name = result.names[class_id]
+
+                detected.append(
+                    f"{name} ({confidence * 100:.0f}%)"
+                )
+
+        if not detected:
+
+            message = "No objects detected."
+
+        else:
+
+            message = "Detected: " + ", ".join(detected)
+
+        return {
             "success": True,
-            "message": result
-        })
+            "message": message
+        }
 
     except Exception as error:
 
-        print("Scan error:", error)
+        print("ERROR:", error)
 
-        return JSONResponse(
-            {
-                "success": False,
-                "message": str(error)
-            },
-            status_code=500
-        )
+        return {
+            "success": False,
+            "message": "Processing error: " + str(error)
+        }
