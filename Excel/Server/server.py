@@ -8,18 +8,55 @@ from ultralytics import YOLO
 
 import io
 import requests
-import pytesseract
+import easyocr
 
 
 app = FastAPI(title="Scan & Discover")
 
 
 # ============================================================
-# YOLO
+# AI MODELS
 # ============================================================
 
 model = YOLO("yolo11n.pt")
 
+ocr_reader = easyocr.Reader(
+    ["en"],
+    gpu=False
+)
+
+# ============================================================
+# OCR
+# ============================================================
+
+def read_text(image):
+
+    try:
+
+        results = ocr_reader.readtext(
+            image
+        )
+
+        text_parts = []
+
+        for detection in results:
+
+            text = detection[1]
+            confidence = detection[2]
+
+            if confidence >= 0.40:
+
+                text_parts.append(text)
+
+        return " ".join(
+            text_parts
+        ).strip()
+
+    except Exception as error:
+
+        print("OCR error:", error)
+
+        return ""
 
 # ============================================================
 # WEB PAGE
@@ -252,52 +289,6 @@ async def home():
 
     </html>
     """
-
-
-# ============================================================
-# OCR
-# ============================================================
-
-def read_text(image):
-
-    """
-    Reads text from the photograph.
-    """
-
-    try:
-
-        gray = cv2.cvtColor(
-            image,
-            cv2.COLOR_BGR2GRAY
-        )
-
-        # Improve text visibility
-        gray = cv2.resize(
-            gray,
-            None,
-            fx=2,
-            fy=2
-        )
-
-        gray = cv2.threshold(
-            gray,
-            0,
-            255,
-            cv2.THRESH_BINARY + cv2.THRESH_OTSU
-        )[1]
-
-        text = pytesseract.image_to_string(
-            gray
-        )
-
-        return text.strip()
-
-    except Exception as error:
-
-        print("OCR error:", error)
-
-        return ""
-
 
 # ============================================================
 # WIKIPEDIA SEARCH
