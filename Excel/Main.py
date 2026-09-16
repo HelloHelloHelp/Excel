@@ -289,7 +289,6 @@ async def scan(file: UploadFile = File(...)):
                     f"({confidence * 100:.0f}%)"
                 )
 
-
         # -----------------------------
         # RESULT
         # -----------------------------
