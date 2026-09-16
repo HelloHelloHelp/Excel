@@ -12,207 +12,215 @@ model = YOLO("yolo11n.pt")
 
 @app.get("/", response_class=HTMLResponse)
 async def home():
+
     return """
     <!DOCTYPE html>
+
     <html>
+
     <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+        <meta name="viewport"
+              content="width=device-width, initial-scale=1.0">
+
         <title>Scan & Discover</title>
 
         <style>
+
             body {
                 background: #111;
                 color: white;
-                font-family: Arial;
+                font-family: Arial, sans-serif;
                 text-align: center;
-                padding: 20px;
+                padding: 30px 20px;
             }
 
-            video {
-                width: 100%;
-                max-width: 600px;
-                border-radius: 12px;
-                background: black;
+            h1 {
+                margin-bottom: 10px;
             }
 
-            button {
-                padding: 15px 25px;
-                margin: 10px;
-                border: none;
-                border-radius: 8px;
-                font-size: 16px;
+            p {
+                color: #bbb;
             }
 
-            #start {
-                background: #2ecc71;
-                color: white;
-            }
-
-            #scan {
+            #photoButton {
+                display: inline-block;
                 background: #3498db;
                 color: white;
-            }
-
-            #stop {
-                background: #e74c3c;
-                color: white;
+                padding: 16px 30px;
+                border-radius: 10px;
+                font-size: 18px;
+                cursor: pointer;
+                margin-top: 20px;
             }
 
             #result {
-                margin: 20px auto;
-                padding: 15px;
-                max-width: 600px;
                 background: #222;
-                border-radius: 8px;
+                border-radius: 10px;
+                padding: 20px;
+                margin: 25px auto;
+                max-width: 600px;
             }
+
+            #preview {
+                max-width: 100%;
+                border-radius: 10px;
+                margin-top: 20px;
+                display: none;
+            }
+
+            #loading {
+                display: none;
+                color: #3498db;
+            }
+
         </style>
+
     </head>
+
 
     <body>
 
         <h1>Scan & Discover</h1>
 
-        <button id="start" onclick="startCamera()">
-            Start Camera
-        </button>
+        <p>
+            Take a photo of something and I'll analyse it.
+        </p>
 
-        <button id="scan" onclick="scan()" disabled>
-            Scan
-        </button>
 
-        <button id="stop" onclick="stopCamera()" disabled>
-            Stop Camera
-        </button>
+        <!-- PHONE CAMERA -->
 
-        <br><br>
+        <label id="photoButton" for="photo">
+            📷 Take Photo
+        </label>
 
-        <video id="video" autoplay playsinline></video>
+        <input
+            id="photo"
+            type="file"
+            accept="image/*"
+            capture="environment"
+            style="display:none"
+        >
 
-        <canvas id="canvas" style="display:none;"></canvas>
+
+        <!-- PHOTO PREVIEW -->
+
+        <img id="preview">
+
+
+        <!-- STATUS -->
+
+        <div id="loading">
+            Analysing photo...
+        </div>
+
+
+        <!-- RESULT -->
 
         <div id="result">
-            Start the camera.
+            No photo taken yet.
         </div>
+
 
         <script>
 
-            let stream = null;
+            const photoInput =
+                document.getElementById("photo");
 
-            async function startCamera() {
+            const preview =
+                document.getElementById("preview");
 
-                try {
+            const result =
+                document.getElementById("result");
 
-                    stream = await navigator.mediaDevices.getUserMedia({
-                        video: {
-                            facingMode: "environment"
-                        },
-                        audio: false
-                    });
-
-                    const video = document.getElementById("video");
-
-                    video.srcObject = stream;
-
-                    document.getElementById("scan").disabled = false;
-                    document.getElementById("stop").disabled = false;
-                    document.getElementById("start").disabled = true;
-
-                    document.getElementById("result").innerText =
-                        "Camera ready. Point at an object and press Scan.";
-
-                } catch (error) {
-
-                    console.error(error);
-
-                    document.getElementById("result").innerText =
-                        "Camera error: " + error.message;
-                }
-            }
+            const loading =
+                document.getElementById("loading");
 
 
-            function stopCamera() {
+            photoInput.addEventListener(
+                "change",
+                async function() {
 
-                if (stream) {
+                    const file = this.files[0];
 
-                    stream.getTracks().forEach(
-                        track => track.stop()
-                    );
-
-                    stream = null;
-                }
-
-                document.getElementById("video").srcObject = null;
-
-                document.getElementById("scan").disabled = true;
-                document.getElementById("stop").disabled = true;
-                document.getElementById("start").disabled = false;
-
-                document.getElementById("result").innerText =
-                    "Camera stopped.";
-            }
+                    if (!file) {
+                        return;
+                    }
 
 
-            async function scan() {
+                    // Show preview
 
-                if (!stream) {
-                    return;
-                }
+                    preview.src =
+                        URL.createObjectURL(file);
 
-                const video = document.getElementById("video");
-                const canvas = document.getElementById("canvas");
+                    preview.style.display = "block";
 
-                canvas.width = video.videoWidth;
-                canvas.height = video.videoHeight;
 
-                const context = canvas.getContext("2d");
+                    result.innerText = "";
 
-                context.drawImage(
-                    video,
-                    0,
-                    0,
-                    canvas.width,
-                    canvas.height
-                );
+                    loading.style.display = "block";
 
-                document.getElementById("result").innerText =
-                    "Scanning...";
 
-                canvas.toBlob(async function(blob) {
+                    // Prepare upload
 
-                    const formData = new FormData();
+                    const formData =
+                        new FormData();
 
                     formData.append(
                         "file",
-                        blob,
-                        "camera.jpg"
+                        file
                     );
+
 
                     try {
 
-                        const response = await fetch("/scan", {
-                            method: "POST",
-                            body: formData
-                        });
+                        const response =
+                            await fetch(
+                                "/scan",
+                                {
+                                    method: "POST",
+                                    body: formData
+                                }
+                            );
 
-                        const data = await response.json();
 
-                        document.getElementById("result").innerText =
-                            data.message;
+                        const data =
+                            await response.json();
+
+
+                        if (data.success) {
+
+                            result.innerText =
+                                data.message;
+
+                        } else {
+
+                            result.innerText =
+                                "Error: " +
+                                data.message;
+
+                        }
+
 
                     } catch (error) {
 
                         console.error(error);
 
-                        document.getElementById("result").innerText =
-                            "Server error.";
+                        result.innerText =
+                            "Could not connect to the server.";
+
                     }
 
-                }, "image/jpeg", 0.85);
-            }
+
+                    loading.style.display = "none";
+
+                }
+            );
 
         </script>
 
     </body>
+
     </html>
     """
 
@@ -222,64 +230,97 @@ async def scan(file: UploadFile = File(...)):
 
     try:
 
+        # Read uploaded photo
         image_data = await file.read()
 
-        # Convert uploaded image to NumPy
+
+        # Convert photo to NumPy array
         image_array = np.frombuffer(
             image_data,
             dtype=np.uint8
         )
 
-        # Decode with OpenCV
+
+        # Decode image with OpenCV
         frame = cv2.imdecode(
             image_array,
             cv2.IMREAD_COLOR
         )
 
+
         if frame is None:
-            return {
-                "success": False,
-                "message": "Could not decode image."
-            }
 
-        print("Image received:", frame.shape)
+            raise ValueError(
+                "Could not decode the photo."
+            )
 
-        # YOLO detection
+
+        print(
+            "Photo received:",
+            frame.shape
+        )
+
+
+        # -----------------------------
+        # YOLO ANALYSIS
+        # -----------------------------
+
         results = model(frame)
 
+
         detected = []
+
 
         for result in results:
 
             for box in result.boxes:
 
                 class_id = int(box.cls[0])
-                confidence = float(box.conf[0])
+
+                confidence = float(
+                    box.conf[0]
+                )
 
                 name = result.names[class_id]
 
+
                 detected.append(
-                    f"{name} ({confidence * 100:.0f}%)"
+                    f"{name} "
+                    f"({confidence * 100:.0f}%)"
                 )
+
+
+        # -----------------------------
+        # RESULT
+        # -----------------------------
 
         if not detected:
 
-            message = "No objects detected."
+            message = "I couldn't identify any objects."
 
         else:
 
-            message = "Detected: " + ", ".join(detected)
+            message = (
+                "I found: "
+                + ", ".join(detected)
+            )
+
 
         return {
             "success": True,
             "message": message
         }
 
+
     except Exception as error:
 
-        print("ERROR:", error)
+        print(
+            "Scan error:",
+            error
+        )
+
 
         return {
             "success": False,
-            "message": "Processing error: " + str(error)
+            "message": str(error)
         }
