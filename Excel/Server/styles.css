@@ -1,0 +1,64 @@
+body {
+    background: #111;
+    color: white;
+    font-family: Arial, sans-serif;
+    text-align: center;
+    padding: 30px 20px;
+}
+
+
+h1 {
+    font-size: 32px;
+    margin-bottom: 10px;
+}
+
+
+p {
+    color: #bbb;
+}
+
+
+#photoButton {
+    display: inline-block;
+    background: #3498db;
+    color: white;
+    padding: 18px 30px;
+    border-radius: 12px;
+    font-size: 20px;
+    cursor: pointer;
+    margin-top: 20px;
+}
+
+
+#photo {
+    display: none;
+}
+
+
+#preview {
+    display: none;
+    width: 100%;
+    max-width: 500px;
+    margin: 25px auto;
+    border-radius: 12px;
+}
+
+
+#loading {
+    display: none;
+    color: #3498db;
+    font-size: 18px;
+    margin: 20px;
+}
+
+
+#result {
+    background: #222;
+    padding: 20px;
+    margin: 25px auto;
+    max-width: 600px;
+    border-radius: 12px;
+    text-align: left;
+    line-height: 1.6;
+    white-space: pre-line;
+}

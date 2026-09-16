@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>Scan & Discover</title>
+
+    <link rel="stylesheet"
+          href="/style.css">
+
+</head>
+
+
+<body>
+
+    <h1>🔎 Scan & Discover</h1>
+
+    <p>
+        Take a photo of an object and discover its history.
+    </p>
+
+
+    <!-- CAMERA BUTTON -->
+
+    <label id="photoButton"
+           for="photo">
+        📷 Take Photo
+    </label>
+
+
+    <input id="photo"
+           type="file"
+           accept="image/*"
+           capture="environment">
+
+
+    <!-- PHOTO PREVIEW -->
+
+    <img id="preview"
+         alt="Photo preview">
+
+
+    <!-- LOADING -->
+
+    <div id="loading">
+        🔍 Analysing photo...
+    </div>
+
+
+    <!-- RESULT -->
+
+    <div id="result">
+        Take a photo to begin.
+    </div>
+
+
+    <script>
+
+        const photoInput =
+            document.getElementById("photo");
+
+        const preview =
+            document.getElementById("preview");
+
+        const result =
+            document.getElementById("result");
+
+        const loading =
+            document.getElementById("loading");
+
+
+        photoInput.addEventListener(
+            "change",
+            async function () {
+
+                const file = this.files[0];
+
+                if (!file) {
+                    return;
+                }
+
+
+                // Show preview
+
+                preview.src =
+                    URL.createObjectURL(file);
+
+                preview.style.display =
+                    "block";
+
+
+                result.innerText = "";
+
+                loading.style.display =
+                    "block";
+
+
+                // Prepare upload
+
+                const formData =
+                    new FormData();
+
+                formData.append(
+                    "file",
+                    file,
+                    "photo.jpg"
+                );
+
+
+                try {
+
+                    const response =
+                        await fetch(
+                            "/scan",
+                            {
+                                method: "POST",
+                                body: formData
+                            }
+                        );
+
+
+                    const data =
+                        await response.json();
+
+
+                    if (data.success) {
+
+                        result.innerText =
+                            data.message;
+
+                    } else {
+
+                        result.innerText =
+                            "❌ " +
+                            data.message;
+
+                    }
+
+                }
+
+                catch (error) {
+
+                    console.error(error);
+
+                    result.innerText =
+                        "❌ Could not connect to the server.";
+
+                }
+
+
+                loading.style.display =
+                    "none";
+
+            }
+        );
+
+    </script>
+
+</body>
+
+</html>
+<!DOCTYPE html>
+
+<html lang="en">
+
+<head>
+
+    <meta charset="UTF-8">
+
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1.0">
+
+    <title>Scan & Discover</title>
+
+    <link rel="stylesheet"
+          href="/style.css">
+
+</head>
+
+
+<body>
+
+    <h1>🔎 Scan & Discover</h1>
+
+    <p>
+        Take a photo of an object and discover its history.
+    </p>
+
+
+    <!-- CAMERA BUTTON -->
+
+    <label id="photoButton"
+           for="photo">
+        📷 Take Photo
+    </label>
+
+
+    <input id="photo"
+           type="file"
+           accept="image/*"
+           capture="environment">
+
+
+    <!-- PHOTO PREVIEW -->
+
+    <img id="preview"
+         alt="Photo preview">
+
+
+    <!-- LOADING -->
+
+    <div id="loading">
+        🔍 Analysing photo...
+    </div>
+
+
+    <!-- RESULT -->
+
+    <div id="result">
+        Take a photo to begin.
+    </div>
+
+
+    <script>
+
+        const photoInput =
+            document.getElementById("photo");
+
+        const preview =
+            document.getElementById("preview");
+
+        const result =
+            document.getElementById("result");
+
+        const loading =
+            document.getElementById("loading");
+
+
+        photoInput.addEventListener(
+            "change",
+            async function () {
+
+                const file = this.files[0];
+
+                if (!file) {
+                    return;
+                }
+
+
+                // Show preview
+
+                preview.src =
+                    URL.createObjectURL(file);
+
+                preview.style.display =
+                    "block";
+
+
+                result.innerText = "";
+
+                loading.style.display =
+                    "block";
+
+
+                // Prepare upload
+
+                const formData =
+                    new FormData();
+
+                formData.append(
+                    "file",
+                    file,
+                    "photo.jpg"
+                );
+
+
+                try {
+
+                    const response =
+                        await fetch(
+                            "/scan",
+                            {
+                                method: "POST",
+                                body: formData
+                            }
+                        );
+
+
+                    const data =
+                        await response.json();
+
+
+                    if (data.success) {
+
+                        result.innerText =
+                            data.message;
+
+                    } else {
+
+                        result.innerText =
+                            "❌ " +
+                            data.message;
+
+                    }
+
+                }
+
+                catch (error) {
+
+                    console.error(error);
+
+                    result.innerText =
+                        "❌ Could not connect to the server.";
+
+                }
+
+
+                loading.style.display =
+                    "none";
+
+            }
+        );
+
+    </script>
+
+</body>
+
+</html>

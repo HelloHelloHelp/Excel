@@ -30,7 +30,9 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="Scan&amp;Discover.txt" />
+    <Content Include="Server\index.html" />
     <Content Include="Server\requirements.txt" />
+    <Content Include="Server\styles.css" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="Server\" />
