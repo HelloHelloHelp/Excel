@@ -1,27 +1,51 @@
 import cv2
 import numpy as np
+
 from ultralytics import YOLO
 
 import requests
-import easyocr
 
 
 # ============================================================
-# AI MODELS
+# YOLO MODEL
 # ============================================================
 
 print("Loading YOLO model...")
 
 model = YOLO("yolo11n.pt")
 
-print("Loading OCR...")
+print("YOLO model loaded.")
 
-ocr_reader = easyocr.Reader(
-    ["en"],
-    gpu=False
-)
 
-print("AI models loaded.")
+# ============================================================
+# OCR
+# ============================================================
+
+# Do NOT load EasyOCR when the server starts.
+# This saves RAM during Render startup.
+
+ocr_reader = None
+
+
+def get_ocr_reader():
+
+    global ocr_reader
+
+    if ocr_reader is None:
+
+        print("Loading EasyOCR...")
+
+        import easyocr
+
+        ocr_reader = easyocr.Reader(
+            ["en"],
+            gpu=False,
+            verbose=False
+        )
+
+        print("EasyOCR loaded.")
+
+    return ocr_reader
 
 
 # ============================================================
@@ -32,7 +56,9 @@ def read_text(image):
 
     try:
 
-        results = ocr_reader.readtext(image)
+        reader = get_ocr_reader()
+
+        results = reader.readtext(image)
 
         text_parts = []
 
@@ -42,6 +68,7 @@ def read_text(image):
             confidence = detection[2]
 
             if confidence >= 0.40:
+
                 text_parts.append(text)
 
         return " ".join(text_parts).strip()
@@ -84,11 +111,13 @@ def search_wikipedia(search_text):
     data = response.json()
 
     results = (
-        data.get("query", {})
+        data
+        .get("query", {})
         .get("search", [])
     )
 
     if not results:
+
         return None
 
     return results[0]["title"]
@@ -126,7 +155,8 @@ def get_wikipedia_page(title):
     data = response.json()
 
     pages = (
-        data.get("query", {})
+        data
+        .get("query", {})
         .get("pages", {})
     )
 
@@ -161,10 +191,12 @@ def get_wikipedia_page(title):
 def get_wikidata_information(wikidata_id):
 
     if not wikidata_id:
+
         return {}
 
     url = (
-        "https://www.wikidata.org/wiki/Special:EntityData/"
+        "https://www.wikidata.org/wiki/"
+        "Special:EntityData/"
         + wikidata_id
         + ".json"
     )
@@ -182,11 +214,13 @@ def get_wikidata_information(wikidata_id):
     data = response.json()
 
     entity = (
-        data.get("entities", {})
+        data
+        .get("entities", {})
         .get(wikidata_id)
     )
 
     if not entity:
+
         return {}
 
     claims = entity.get(
@@ -205,13 +239,18 @@ def get_wikidata_information(wikidata_id):
 
         try:
 
-            value = claims["P571"][0][
-                "mainsnak"
-            ]["datavalue"]["value"]["time"]
+            value = (
+                claims["P571"][0]
+                ["mainsnak"]
+                ["datavalue"]
+                ["value"]
+                ["time"]
+            )
 
             year = value[1:5]
 
         except Exception:
+
             pass
 
     # ========================================================
@@ -228,15 +267,18 @@ def get_wikidata_information(wikidata_id):
 
             try:
 
-                person_id = claims[
-                    property_id
-                ][0]["mainsnak"][
-                    "datavalue"
-                ]["value"]["id"]
+                person_id = (
+                    claims[property_id][0]
+                    ["mainsnak"]
+                    ["datavalue"]
+                    ["value"]
+                    ["id"]
+                )
 
                 break
 
             except Exception:
+
                 pass
 
     person_name = None
@@ -244,7 +286,8 @@ def get_wikidata_information(wikidata_id):
     if person_id:
 
         person_url = (
-            "https://www.wikidata.org/wiki/Special:EntityData/"
+            "https://www.wikidata.org/wiki/"
+            "Special:EntityData/"
             + person_id
             + ".json"
         )
@@ -255,17 +298,22 @@ def get_wikidata_information(wikidata_id):
                 person_url,
                 timeout=10,
                 headers={
-                    "User-Agent": "ScanAndDiscover/1.0"
+                    "User-Agent":
+                    "ScanAndDiscover/1.0"
                 }
             )
 
             person_response.raise_for_status()
 
-            person_data = person_response.json()
+            person_data = (
+                person_response.json()
+            )
 
-            person_entity = person_data[
-                "entities"
-            ][person_id]
+            person_entity = (
+                person_data
+                ["entities"]
+                [person_id]
+            )
 
             labels = person_entity.get(
                 "labels",
@@ -273,11 +321,13 @@ def get_wikidata_information(wikidata_id):
             )
 
             person_name = (
-                labels.get("en", {})
+                labels
+                .get("en", {})
                 .get("value")
             )
 
         except Exception:
+
             pass
 
     return {
@@ -290,12 +340,15 @@ def get_wikidata_information(wikidata_id):
 # IDENTIFICATION
 # ============================================================
 
-def identify_object(ocr_text, yolo_objects):
+def identify_object(
+    ocr_text,
+    yolo_objects
+):
 
     search_text = ""
 
     # ========================================================
-    # OCR
+    # OCR TEXT
     # ========================================================
 
     if ocr_text:
@@ -307,6 +360,7 @@ def identify_object(ocr_text, yolo_objects):
             line = line.strip()
 
             if len(line) >= 3:
+
                 lines.append(line)
 
         if lines:
@@ -319,13 +373,17 @@ def identify_object(ocr_text, yolo_objects):
     # YOLO FALLBACK
     # ========================================================
 
-    if not search_text and yolo_objects:
+    if (
+        not search_text
+        and yolo_objects
+    ):
 
         search_text = " ".join(
             yolo_objects[:3]
         )
 
     if not search_text:
+
         return None
 
     print(
@@ -340,6 +398,7 @@ def identify_object(ocr_text, yolo_objects):
         )
 
         if not title:
+
             return None
 
         page = get_wikipedia_page(
@@ -347,14 +406,20 @@ def identify_object(ocr_text, yolo_objects):
         )
 
         if not page:
+
             return None
 
-        wikidata = get_wikidata_information(
-            page.get("wikidata_id")
+        wikidata = (
+            get_wikidata_information(
+                page.get("wikidata_id")
+            )
         )
 
         return {
-            "name": page.get("title"),
+
+            "name": page.get(
+                "title"
+            ),
 
             "history": page.get(
                 "description"
@@ -420,11 +485,15 @@ def process_image(image_data):
 
     MAX_SIZE = 1280
 
-    if max(frame.shape[:2]) > MAX_SIZE:
+    original_max_size = max(
+        frame.shape[:2]
+    )
+
+    if original_max_size > MAX_SIZE:
 
         scale = (
             MAX_SIZE /
-            max(frame.shape[:2])
+            original_max_size
         )
 
         new_width = int(
@@ -437,7 +506,10 @@ def process_image(image_data):
 
         frame = cv2.resize(
             frame,
-            (new_width, new_height),
+            (
+                new_width,
+                new_height
+            ),
             interpolation=cv2.INTER_AREA
         )
 
@@ -450,7 +522,12 @@ def process_image(image_data):
     # YOLO
     # ========================================================
 
-    results = model(frame)
+    print("Running YOLO...")
+
+    results = model(
+        frame,
+        verbose=False
+    )
 
     yolo_objects = []
 
@@ -463,6 +540,7 @@ def process_image(image_data):
             )
 
             if confidence < 0.40:
+
                 continue
 
             class_id = int(
@@ -495,6 +573,8 @@ def process_image(image_data):
     # ========================================================
     # OCR
     # ========================================================
+
+    print("Running OCR...")
 
     ocr_text = read_text(
         frame
@@ -601,13 +681,21 @@ def process_image(image_data):
             "this object."
         )
 
+    # ========================================================
+    # FINAL MESSAGE
+    # ========================================================
+
     message = "\n".join(
         lines
     )
 
     return {
+
         "message": message,
+
         "objects": yolo_objects,
+
         "ocr": ocr_text,
+
         "information": information
     }
