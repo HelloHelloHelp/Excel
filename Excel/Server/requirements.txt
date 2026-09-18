@@ -1,11 +1,8 @@
 fastapi
 uvicorn
+requests
+pillow
+pytesseract
 python-multipart
 opencv-python-headless
 numpy
-sqlalchemy
-requests
-pillow
-pytest
-ultralytics
-easyocr
