@@ -7,74 +7,123 @@ body {
     padding: 20px;
 }
 
-
+/* =====================================================
+TITLE
+===================================================== */
 
 h1 {
+    margin: 10px 0 8px;
     font-size: 28px;
+}
+
+p {
+    color: #aaa;
+    margin: 0 0 20px;
+}
+
+/* =====================================================
+CAMERA SCREEN
+===================================================== */
+
+.camera-container {
+    width: 100%;
+    max-width: 500px;
+    height: 320px;
+    margin: 0 auto 15px;
+    background: #000;
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+#camera {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+/* =====================================================
+START / STOP BUTTONS
+===================================================== */
+
+.camera-buttons {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
     margin-bottom: 10px;
 }
 
-
-
-p {
-    color: #bbb;
-    margin-bottom: 20px;
-}
-
-
-
-#photoButton {
-    display: inline-block;
-    background: #3498db;
-    color: white;
-    padding: 14px 24px;
-    font-size: 16px;
+button {
     border: none;
     border-radius: 8px;
+    padding: 12px 20px;
+    font-size: 16px;
+    font-weight: bold;
+    color: white;
     cursor: pointer;
-    margin: 10px;
+    transition: 0.2s;
 }
 
-    #photoButton:hover {
+/* START BUTTON */
+
+#startButton {
+    background: #2ecc71;
+}
+
+/* STOP BUTTON */
+
+#stopButton {
+    background: #e74c3c;
+}
+
+/* =====================================================
+DISABLED BUTTONS
+===================================================== */
+
+button:disabled {
+    background: #555 !important;
+    color: #aaa;
+    cursor: not-allowed;
+    opacity: 1;
+}
+
+/* =====================================================
+SCAN BUTTON
+===================================================== */
+
+#scanButton {
+    background: #3498db;
+    min-width: 150px;
+    margin: 5px auto 20px;
+}
+
+    #scanButton:not(:disabled):hover {
         background: #2980b9;
     }
 
-
-#photo {
-    display: none;
-}
-
-
-
-#preview {
-    display: none;
-    width: 100%;
-    max-width: 600px;
-    max-height: 400px;
-    object-fit: contain;
-    margin: 20px auto;
-    border-radius: 12px;
-    background: black;
-}
-
-
-
-#loading {
-    display: none;
-    color: #3498db;
-    font-size: 16px;
-    margin: 20px;
-}
-
-
+/* =====================================================
+RESULT BOX
+===================================================== */
 
 #result {
-    background: #222;
+    width: 100%;
+    max-width: 500px;
+    box-sizing: border-box;
+    margin: 0 auto;
     padding: 15px;
-    margin: 20px auto;
-    max-width: 600px;
+    background: #222;
     border-radius: 8px;
+    color: #eee;
     text-align: left;
-    line-height: 1.6;
+    line-height: 1.5;
     white-space: pre-line;
+    min-height: 24px;
+}
+
+/* =====================================================
+HIDDEN CANVAS
+===================================================== */
+
+#canvas {
+    display: none;
 }
