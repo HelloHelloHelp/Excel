@@ -3,31 +3,41 @@ body {
     color: white;
     font-family: Arial, sans-serif;
     text-align: center;
-    padding: 30px 20px;
+    margin: 0;
+    padding: 20px;
 }
 
 
+
 h1 {
-    font-size: 32px;
+    font-size: 28px;
     margin-bottom: 10px;
 }
 
 
+
 p {
     color: #bbb;
+    margin-bottom: 20px;
 }
+
 
 
 #photoButton {
     display: inline-block;
     background: #3498db;
     color: white;
-    padding: 18px 30px;
-    border-radius: 12px;
-    font-size: 20px;
+    padding: 14px 24px;
+    font-size: 16px;
+    border: none;
+    border-radius: 8px;
     cursor: pointer;
-    margin-top: 20px;
+    margin: 10px;
 }
+
+    #photoButton:hover {
+        background: #2980b9;
+    }
 
 
 #photo {
@@ -35,29 +45,35 @@ p {
 }
 
 
+
 #preview {
     display: none;
     width: 100%;
-    max-width: 500px;
-    margin: 25px auto;
+    max-width: 600px;
+    max-height: 400px;
+    object-fit: contain;
+    margin: 20px auto;
     border-radius: 12px;
+    background: black;
 }
+
 
 
 #loading {
     display: none;
     color: #3498db;
-    font-size: 18px;
+    font-size: 16px;
     margin: 20px;
 }
 
 
+
 #result {
     background: #222;
-    padding: 20px;
-    margin: 25px auto;
+    padding: 15px;
+    margin: 20px auto;
     max-width: 600px;
-    border-radius: 12px;
+    border-radius: 8px;
     text-align: left;
     line-height: 1.6;
     white-space: pre-line;

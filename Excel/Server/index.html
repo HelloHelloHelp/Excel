@@ -1,9 +1,6 @@
 <!DOCTYPE html>
-
 <html lang="en">
-
 <head>
-
     <meta charset="UTF-8">
 
     <meta name="viewport"
@@ -15,20 +12,15 @@
           href="/style.css">
 
 </head>
-
-
 <body>
-
-
     <h1>🔎 Scan & Discover</h1>
-
 
     <p>
         Take a photo of an object and discover its history.
     </p>
 
 
-    <!-- CAMERA BUTTON -->
+
 
     <label id="photoButton"
            for="photo">
@@ -44,13 +36,13 @@
            capture="environment">
 
 
-    <!-- PHOTO PREVIEW -->
+  
 
     <img id="preview"
          alt="Photo preview">
 
 
-    <!-- LOADING -->
+
 
     <div id="loading">
 
@@ -59,7 +51,6 @@
     </div>
 
 
-    <!-- RESULT -->
 
     <div id="result">
 
@@ -70,69 +61,48 @@
 
     <script>
 
-
         const photoInput =
             document.getElementById("photo");
-
 
         const preview =
             document.getElementById("preview");
 
-
         const result =
             document.getElementById("result");
-
 
         const loading =
             document.getElementById("loading");
 
 
-        // =====================================================
-        // TAKE PHOTO
-        // =====================================================
 
         photoInput.addEventListener(
             "change",
             async function () {
 
-
                 const file =
                     this.files[0];
 
-
                 if (!file) {
-
                     return;
-
                 }
 
 
-                // =================================================
-                // SHOW PHOTO PREVIEW
-                // =================================================
 
                 preview.src =
                     URL.createObjectURL(file);
 
-
                 preview.style.display =
                     "block";
 
-
                 result.innerText = "";
-
 
                 loading.style.display =
                     "block";
 
 
-                // =================================================
-                // PREPARE UPLOAD
-                // =================================================
 
                 const formData =
                     new FormData();
-
 
                 formData.append(
                     "file",
@@ -141,12 +111,8 @@
                 );
 
 
-                // =================================================
-                // SEND PHOTO TO SERVER
-                // =================================================
 
                 try {
-
 
                     const response =
                         await fetch(
@@ -162,37 +128,27 @@
                         await response.json();
 
 
-                    // =================================================
-                    // SHOW RESULT
-                    // =================================================
-
+             
                     if (data.success) {
-
 
                         result.innerText =
                             data.message;
 
-
                     } else {
-
 
                         result.innerText =
                             "❌ " +
                             data.message;
-
 
                     }
 
 
                 } catch (error) {
 
-
                     console.error(error);
-
 
                     result.innerText =
                         "❌ Could not connect to the server.";
-
 
                 }
 
@@ -200,14 +156,10 @@
                 loading.style.display =
                     "none";
 
-
             }
         );
 
-
     </script>
 
-
 </body>
-
 </html>
