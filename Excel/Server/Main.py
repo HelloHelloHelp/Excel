@@ -182,53 +182,107 @@ async def scan(request: Request, file: UploadFile = File(...)):
             scale = MAX_DIM / max(h, w)
             frame = cv2.resize(frame, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
 
-        # Run YOLO detection. Optionally avoid keeping model in memory between requests to reduce peak RAM.
+        # Decide whether to use local YOLO model or remote visual search
+        # KEEP_MODEL controls whether a loaded model should persist between requests
         KEEP_MODEL = os.environ.get('KEEP_MODEL_IN_MEMORY', '0') == '1'
-        if KEEP_MODEL:
-            model = get_model()
-        else:
-            from ultralytics import YOLO as _YOLO_local
-            model_name_local = os.environ.get("YOLO_MODEL", "yolo8n.pt")
-            model = _YOLO_local(model_name_local)
-
-        # Use small inference size to lower memory usage
+        USE_LOCAL = os.environ.get("USE_LOCAL_MODEL", "0") == "1"
+        # small inference size (used when running local model)
         IMG_SIZE = int(os.environ.get("IMG_SIZE", "160"))
-        results = model(frame, imgsz=IMG_SIZE, device='cpu')
 
-        detected = []
+        # Keep original bytes for remote visual search attempts
+        img_bytes = image_data
 
-        for result in results:
+        if not USE_LOCAL:
+            # 1) Try full-image visual search (best for product-level matches)
+            try:
+                s_full = connect.search(query=None, image_bytes=img_bytes, top_k=5)
+                if isinstance(s_full, dict) and s_full.get("success") and s_full.get("results"):
+                    top = s_full.get("results")[0]
+                    message = f"Possible match: {top.get('name') or top.get('url')}"
+                    # free memory and return
+                    del frame, image_array, image_data
+                    gc.collect()
+                    return {"success": True, "message": message, "source": "full_image_visual", "results": s_full.get("results")}
+            except Exception:
+                logging.exception("full-image visual search failed in /scan")
 
-            for box in result.boxes:
+            # 2) Try a few center crops with visual search
+            def center_crop(img, size):
+                h, w = img.shape[:2]
+                if h < size or w < size:
+                    return cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
+                cy, cx = h // 2, w // 2
+                y1 = max(0, cy - size // 2)
+                x1 = max(0, cx - size // 2)
+                return img[y1:y1+size, x1:x1+size]
 
-                class_id = int(box.cls[0])
+            try:
+                for s in (IMG_SIZE, max(128, IMG_SIZE//2)):
+                    try:
+                        c = center_crop(frame, s)
+                        _, cj = cv2.imencode('.jpg', c)
+                        sres = connect.search(query=None, image_bytes=cj.tobytes(), top_k=5)
+                        if isinstance(sres, dict) and sres.get('success') and sres.get('results'):
+                            top = sres.get('results')[0]
+                            message = f"Possible match: {top.get('name') or top.get('url')}"
+                            del frame, image_array, image_data
+                            gc.collect()
+                            return {"success": True, "message": message, "source": "crop_visual", "results": sres.get('results')}
+                    except Exception:
+                        logging.exception('crop visual search failed')
+            except Exception:
+                logging.exception('center crop loop failed')
 
-                confidence = float(
-                    box.conf[0]
-                )
+            # 3) Try OCR on whole image and text search
+            try:
+                pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                ocr_text = pytesseract.image_to_string(pil_img, config='--psm 6').strip()
+                if ocr_text and len(ocr_text) > 2:
+                    stext = connect.search(query=ocr_text, image_bytes=None, top_k=5)
+                    if isinstance(stext, dict) and stext.get('success') and stext.get('results'):
+                        top = stext.get('results')[0]
+                        message = f"Possible match (from text): {top.get('name') or top.get('url')}"
+                        del frame, image_array, image_data
+                        gc.collect()
+                        return {"success": True, "message": message, "source": "ocr_text", "results": stext.get('results')}
+            except Exception:
+                logging.exception('OCR/text search failed in /scan')
 
-                name = result.names[class_id]
-
-
-                detected.append(
-                    f"{name} "
-                    f"({confidence * 100:.0f}%)"
-                )
-
-        # -----------------------------
-        # RESULT
-        # -----------------------------
-
-        if not detected:
-
-            message = "I couldn't identify any objects."
-
+            # If nothing matched
+            message = "Unknown"
         else:
+            # Use local YOLO detection path
+            if KEEP_MODEL:
+                model = get_model()
+            else:
+                from ultralytics import YOLO as _YOLO_local
+                model_name_local = os.environ.get("YOLO_MODEL", "yolo8n.pt")
+                model = _YOLO_local(model_name_local)
 
-            message = (
-                "I found: "
-                + ", ".join(detected)
-            )
+            # Run local inference (CPU, small img size to reduce memory)
+            results = model(frame, imgsz=IMG_SIZE, device='cpu')
+
+            detected = []
+            for result in results:
+                for box in result.boxes:
+                    try:
+                        class_id = int(box.cls[0])
+                    except Exception:
+                        class_id = None
+                    try:
+                        confidence = float(box.conf[0])
+                    except Exception:
+                        confidence = None
+                    name = result.names[class_id] if class_id is not None and class_id in result.names else str(class_id)
+                    if confidence is not None:
+                        detected.append(f"{name} ({confidence * 100:.0f}%)")
+                    else:
+                        detected.append(name)
+
+            if not detected:
+                message = "I couldn't identify any objects."
+            else:
+                message = "I found: " + ", ".join(detected)
 
         # free memory and optionally unload model
         del frame, image_array, image_data
@@ -281,14 +335,22 @@ async def scan_json(request: Request, payload: ImagePayload):
 
         img_h, img_w = frame.shape[:2]
 
+        # Respect USE_LOCAL_MODEL: if a local model is requested, skip the
+        # initial full-image visual search and prefer local detections.
+        USE_LOCAL = os.environ.get("USE_LOCAL_MODEL", "0") == "1"
+
         # 1) Try full-image visual search (best for product-level matches)
-        try:
-            s_full = connect.search(query=None, image_bytes=img_bytes, top_k=5)
-            logging.info("full-image visual search result: %s", s_full.get("source") if isinstance(s_full, dict) else str(type(s_full)))
-            if s_full.get("success") and s_full.get("results"):
-                return JSONResponse(status_code=200, content={"success": True, "data": {"source": "full_image_visual", "results": s_full.get("results")}})
-        except Exception:
-            logging.exception("full-image visual search failed")
+        # Only attempt when not using a local model.
+        if not USE_LOCAL:
+            try:
+                s_full = connect.search(query=None, image_bytes=img_bytes, top_k=5)
+                logging.info("full-image visual search result: %s", s_full.get("source") if isinstance(s_full, dict) else str(type(s_full)))
+                if s_full.get("success") and s_full.get("results"):
+                    return JSONResponse(status_code=200, content={"success": True, "data": {"source": "full_image_visual", "results": s_full.get("results")}})
+            except Exception:
+                logging.exception("full-image visual search failed")
+        else:
+            logging.info("USE_LOCAL_MODEL enabled - skipping full-image visual search")
 
         # 2) Run YOLO detections and attempt visual/text search per detection with augmentations
         KEEP_MODEL = os.environ.get('KEEP_MODEL_IN_MEMORY', '0') == '1'
@@ -345,103 +407,59 @@ async def scan_json(request: Request, payload: ImagePayload):
                     shapes.remove(c.shape)
             return unique
 
-        for result in results:
-            for box in result.boxes:
-                # robustly extract coords
-                xy = None
+        if results is None:
+            # No local model: attempt visual search on a few crops and OCR-based text search
+            output = {"detections": []}
+            found_any = False
+            # try a couple of crops (center and quarter)
+            def make_crops(img):
+                h, w = img.shape[:2]
+                crops = []
+                for size in (160, 128):
+                    if h > 0 and w > 0:
+                        cy, cx = h // 2, w // 2
+                        y1 = max(0, cy - size // 2); x1 = max(0, cx - size // 2)
+                        c = img[y1:y1+size, x1:x1+size]
+                        if c.size:
+                            crops.append(c)
+                # quarter-top-left
+                qh, qw = max(10, h//4), max(10, w//4)
+                crops.append(img[0:qh, 0:qw])
+                return crops
+
+            crops = make_crops(frame)
+            for c in crops:
                 try:
-                    xy = box.xyxy[0].tolist()
+                    _, cj = cv2.imencode('.jpg', c)
+                    sres = connect.search(query=None, image_bytes=cj.tobytes(), top_k=5)
+                    if sres.get('success') and sres.get('results'):
+                        output['detections'].append({
+                            'class': '', 'confidence': None, 'ocr': '', 'query_used': 'visual_crop', 'web_results': sres.get('results')
+                        })
+                        found_any = True
                 except Exception:
-                    try:
-                        xy = box.xyxy.cpu().numpy().tolist()[0]
-                    except Exception:
-                        try:
-                            xy = list(box.xyxy)
-                        except Exception:
-                            xy = None
-                if not xy:
-                    continue
-                x1, y1, x2, y2 = map(int, [max(0, xy[0]), max(0, xy[1]), min(img_w - 1, xy[2]), min(img_h - 1, xy[3])])
-                if x2 <= x1 or y2 <= y1:
-                    continue
-                crop = frame[y1:y2, x1:x2]
+                    logging.exception('crop visual search failed in scan_json')
 
-                # OCR on crop
-                try:
-                    pil_img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
-                    ocr_text = pytesseract.image_to_string(pil_img, config='--psm 6').strip()
-                except Exception:
-                    ocr_text = ""
+            # OCR on whole image and try text search
+            try:
+                pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                ocr_text = pytesseract.image_to_string(pil_img, config='--psm 6').strip()
+                if ocr_text:
+                    stext = connect.search(query=ocr_text, image_bytes=None, top_k=5)
+                    if stext.get('success') and stext.get('results'):
+                        output['detections'].append({'class': '', 'confidence': None, 'ocr': ocr_text, 'query_used': 'ocr_text', 'web_results': stext.get('results')})
+                        found_any = True
+            except Exception:
+                logging.exception('OCR/text search failed in scan_json fallback')
 
-                try:
-                    class_id = int(box.cls[0])
-                except Exception:
-                    class_id = None
-                try:
-                    confidence = float(box.conf[0])
-                except Exception:
-                    confidence = None
-
-                class_name = result.names.get(class_id, str(class_id)) if class_id is not None else ""
-
-                web_results = []
-                used_query = ""
-
-                # Try augmented visual searches for this crop
-                aug_crops = augment_crops(crop)
-                for ac in aug_crops:
-                    try:
-                        _, ac_jpg = cv2.imencode('.jpg', ac)
-                        ac_bytes = ac_jpg.tobytes()
-                    except Exception:
-                        ac_bytes = None
-                    if not ac_bytes:
-                        continue
-                    try:
-                        s = connect.search(query=None, image_bytes=ac_bytes, top_k=5)
-                        if s.get('success') and s.get('results'):
-                            web_results = s.get('results')
-                            used_query = 'visual_crop'
-                            logging.info('visual crop search succeeded for class %s', class_name)
-                            break
-                    except Exception:
-                        logging.exception('visual crop search failed')
-                # If no visual results, try richer text queries
-                if not web_results:
-                    queries = []
-                    if ocr_text:
-                        queries.append(ocr_text)
-                        queries.append(f"{ocr_text} {class_name}" if class_name else ocr_text)
-                    if class_name:
-                        queries.append(class_name)
-                        queries.append(f"{class_name} product")
-                        queries.append(f"{class_name} brand")
-                    # try queries (unique)
-                    seenq = set()
-                    for q in queries:
-                        if not q:
-                            continue
-                        if q in seenq:
-                            continue
-                        seenq.add(q)
-                        try:
-                            s = connect.search(query=q, image_bytes=None, top_k=5)
-                            if s.get('success') and s.get('results'):
-                                web_results = s.get('results')
-                                used_query = q
-                                logging.info('text search succeeded for query "%s"', q)
-                                break
-                        except Exception:
-                            logging.exception('text search failed for query %s', q)
-
-                det = {
-                    'class': class_name,
-                    'confidence': round(confidence, 3) if confidence is not None else None,
-                    'ocr': ocr_text,
-                    'query_used': used_query,
-                    'web_results': web_results,
-                }
-                output['detections'].append(det)
+            if found_any:
+                del frame, image_array, img_bytes
+                gc.collect()
+                return JSONResponse(status_code=200, content={"success": True, "data": {"source": "visual_only", "detections": output}})
+            # else fall through to try fallback text searches below
+        else:
+            # local model results handled by detection loop below
+            pass
 
         # If no detections or no web results found at all, try a final fallback: class-level full image text search
         any_results = any(d.get('web_results') for d in output.get('detections', []))
