@@ -65,37 +65,40 @@ def get_ocr_reader():
 
 
 def recognize_text_from_image(image):
-    """Attempt OCR using EasyOCR first, fallback to pytesseract.
+    """Attempt OCR using EasyOCR first (imported lazily), fallback to pytesseract.
 
     Args:
         image: OpenCV BGR image (numpy array)
     Returns:
         text: Recognized text (string)
     """
-    # Try EasyOCR
-    if EASY_OCR_AVAILABLE:
+    # Try EasyOCR lazily
+    try:
         try:
+            import easyocr
+        except Exception:
+            easyocr = None
+        if easyocr is not None:
             # easyocr expects RGB
             img_rgb = image[:, :, ::-1]
             reader = easyocr.Reader(["en"], gpu=False)
             results = reader.readtext(img_rgb)
-            # results is list of (bbox, text, confidence)
             texts = [r[1] for r in results if r and len(r) > 1]
             return "\n".join(texts).strip()
-        except Exception:
-            pass
+    except Exception:
+        # fall through to pytesseract
+        pass
 
-    # Fallback to pytesseract
-    if PYTESSERACT_AVAILABLE and Image is not None:
-        try:
-            img_rgb = image[:, :, ::-1]
-            pil = Image.fromarray(img_rgb)
-            text = pytesseract.image_to_string(pil, config='--psm 6')
-            return text.strip()
-        except Exception:
-            pass
-
-    return ""
+    # Fallback to pytesseract (lazy import)
+    try:
+        import pytesseract
+        from PIL import Image as PILImage
+        img_rgb = image[:, :, ::-1]
+        pil = PILImage.fromarray(img_rgb)
+        text = pytesseract.image_to_string(pil, config='--psm 6')
+        return text.strip()
+    except Exception:
+        return ""
 
 
 def read_text(image):
@@ -106,7 +109,8 @@ def read_text(image):
         return ""
 
 
-# Stubs and helpers to avoid undefined symbol warnings and provide simple fallbacks
+# --- Helper stubs to avoid undefined symbol warnings and provide simple fallbacks ---
+
 def search_wikipedia(query, top_k=3):
     """Simple Wikipedia search fallback used by camera module."""
     if not query:
