@@ -205,6 +205,10 @@ class ImagePayload(BaseModel):
 async def scan_json(request: Request, payload: ImagePayload):
     """Accept JSON with a base64-encoded image string in payload.image
     Example: {"image": "data:image/jpeg;base64,/9j/4AAQ..."}
+    Enhanced search strategy:
+      - Try full-image visual search first
+      - If no good visual results, run YOLO detections and try multiple augmented crops with visual search
+      - If still no visual matches, build richer text queries (OCR + class name) and run web search
     """
     if pytesseract is None:
         return JSONResponse(status_code=500, content={"success": False, "message": "pytesseract not available"})
@@ -223,13 +227,66 @@ async def scan_json(request: Request, payload: ImagePayload):
         if frame is None:
             raise ValueError("Could not decode the photo.")
 
-        # Reuse the same detection logic as /scan
+        img_h, img_w = frame.shape[:2]
+
+        # 1) Try full-image visual search (best for product-level matches)
+        try:
+            s_full = connect.search(query=None, image_bytes=img_bytes, top_k=5)
+            logging.info("full-image visual search result: %s", s_full.get("source") if isinstance(s_full, dict) else str(type(s_full)))
+            if s_full.get("success") and s_full.get("results"):
+                return JSONResponse(status_code=200, content={"success": True, "data": {"source": "full_image_visual", "results": s_full.get("results")}})
+        except Exception:
+            logging.exception("full-image visual search failed")
+
+        # 2) Run YOLO detections and attempt visual/text search per detection with augmentations
         results = model(frame)
         output = {"detections": []}
-        img_h, img_w = frame.shape[:2]
+
+        def augment_crops(crop):
+            """Yield augmented versions of crop: original, scaled, rotated"""
+            crops = [crop]
+            h, w = crop.shape[:2]
+            # scales
+            for scale in (0.9, 1.1):
+                try:
+                    nh = max(10, int(h * scale))
+                    nw = max(10, int(w * scale))
+                    scaled = cv2.resize(crop, (nw, nh), interpolation=cv2.INTER_LINEAR)
+                    crops.append(scaled)
+                except Exception:
+                    pass
+            # rotations
+            for ang in (-15, 15):
+                try:
+                    M = cv2.getRotationMatrix2D((w/2, h/2), ang, 1.0)
+                    rotated = cv2.warpAffine(crop, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+                    crops.append(rotated)
+                except Exception:
+                    pass
+            # center crop
+            try:
+                cy, cx = h//2, w//2
+                ch, cw = max(10, h//2), max(10, w//2)
+                y1 = max(0, cy - ch//2); x1 = max(0, cx - cw//2)
+                center = crop[y1:y1+ch, x1:x1+cw]
+                if center.size:
+                    crops.append(center)
+            except Exception:
+                pass
+            # dedupe by shape
+            unique = []
+            shapes = set()
+            for c in crops:
+                shapes.add(c.shape)
+            for c in crops:
+                if c.shape in shapes:
+                    unique.append(c)
+                    shapes.remove(c.shape)
+            return unique
 
         for result in results:
             for box in result.boxes:
+                # robustly extract coords
                 xy = None
                 try:
                     xy = box.xyxy[0].tolist()
@@ -241,19 +298,14 @@ async def scan_json(request: Request, payload: ImagePayload):
                             xy = list(box.xyxy)
                         except Exception:
                             xy = None
-
                 if not xy:
                     continue
                 x1, y1, x2, y2 = map(int, [max(0, xy[0]), max(0, xy[1]), min(img_w - 1, xy[2]), min(img_h - 1, xy[3])])
                 if x2 <= x1 or y2 <= y1:
                     continue
                 crop = frame[y1:y2, x1:x2]
-                try:
-                    _, crop_jpg = cv2.imencode('.jpg', crop)
-                    crop_bytes = crop_jpg.tobytes()
-                except Exception:
-                    crop_bytes = None
 
+                # OCR on crop
                 try:
                     pil_img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
                     ocr_text = pytesseract.image_to_string(pil_img, config='--psm 6').strip()
@@ -271,43 +323,109 @@ async def scan_json(request: Request, payload: ImagePayload):
 
                 class_name = result.names.get(class_id, str(class_id)) if class_id is not None else ""
 
-                query = ""
-                if ocr_text and len(ocr_text) >= 3:
-                    query = ocr_text
-
                 web_results = []
-                if query:
-                    s = connect.search(query=query, image_bytes=None, top_k=3)
-                    if s.get("success"):
-                        web_results = s.get("results", [])
-                    if not web_results and crop_bytes:
-                        s = connect.search(query=None, image_bytes=crop_bytes, top_k=3)
-                        if s.get("success"):
-                            web_results = s.get("results", [])
-                else:
-                    if crop_bytes:
-                        s = connect.search(query=None, image_bytes=crop_bytes, top_k=3)
-                        if s.get("success"):
-                            web_results = s.get("results", [])
-                    if not web_results and class_name:
-                        s = connect.search(query=class_name, image_bytes=None, top_k=3)
-                        if s.get("success"):
-                            web_results = s.get("results", [])
+                used_query = ""
+
+                # Try augmented visual searches for this crop
+                aug_crops = augment_crops(crop)
+                for ac in aug_crops:
+                    try:
+                        _, ac_jpg = cv2.imencode('.jpg', ac)
+                        ac_bytes = ac_jpg.tobytes()
+                    except Exception:
+                        ac_bytes = None
+                    if not ac_bytes:
+                        continue
+                    try:
+                        s = connect.search(query=None, image_bytes=ac_bytes, top_k=5)
+                        if s.get('success') and s.get('results'):
+                            web_results = s.get('results')
+                            used_query = 'visual_crop'
+                            logging.info('visual crop search succeeded for class %s', class_name)
+                            break
+                    except Exception:
+                        logging.exception('visual crop search failed')
+                # If no visual results, try richer text queries
+                if not web_results:
+                    queries = []
+                    if ocr_text:
+                        queries.append(ocr_text)
+                        queries.append(f"{ocr_text} {class_name}" if class_name else ocr_text)
+                    if class_name:
+                        queries.append(class_name)
+                        queries.append(f"{class_name} product")
+                        queries.append(f"{class_name} brand")
+                    # try queries (unique)
+                    seenq = set()
+                    for q in queries:
+                        if not q:
+                            continue
+                        if q in seenq:
+                            continue
+                        seenq.add(q)
+                        try:
+                            s = connect.search(query=q, image_bytes=None, top_k=5)
+                            if s.get('success') and s.get('results'):
+                                web_results = s.get('results')
+                                used_query = q
+                                logging.info('text search succeeded for query "%s"', q)
+                                break
+                        except Exception:
+                            logging.exception('text search failed for query %s', q)
 
                 det = {
-                    "class": class_name,
-                    "confidence": round(confidence, 3) if confidence is not None else None,
-                    "ocr": ocr_text,
-                    "query_used": query if query else ("visual_search" if (crop_bytes and connect.BING_API_KEY) else class_name),
-                    "web_results": web_results,
+                    'class': class_name,
+                    'confidence': round(confidence, 3) if confidence is not None else None,
+                    'ocr': ocr_text,
+                    'query_used': used_query,
+                    'web_results': web_results,
                 }
-                output["detections"].append(det)
+                output['detections'].append(det)
 
-        return JSONResponse(status_code=200, content={"success": True, "data": output})
+        # If no detections or no web results found at all, try a final fallback: class-level full image text search
+        any_results = any(d.get('web_results') for d in output.get('detections', []))
+        if not any_results:
+            # try class-level or generic query from model names
+            fallback_queries = []
+            # use top class names detected
+            top_names = [d['class'] for d in output.get('detections', []) if d.get('class')]
+            if top_names:
+                fallback_queries.extend(top_names[:3])
+            # also try generic queries
+            fallback_queries.append('product')
+            fallback_results = []
+            for q in fallback_queries:
+                try:
+                    s = connect.search(query=q, image_bytes=None, top_k=5)
+                    if s.get('success') and s.get('results'):
+                        fallback_results = s.get('results')
+                        logging.info('fallback text search succeeded for %s', q)
+                        break
+                except Exception:
+                    logging.exception('fallback search failed')
+            if fallback_results:
+                return JSONResponse(status_code=200, content={"success": True, "data": {"source": "fallback_text", "results": fallback_results, "detections": output}})
+
+        return JSONResponse(status_code=200, content={"success": True, "data": {"source": "per_detection", "detections": output}})
 
     except Exception as error:
         logging.exception("scan_json error")
         return JSONResponse(status_code=500, content={"success": False, "message": str(error)})
+
+
+# Debug echo endpoint to log headers and a small preview of the body
+@app.post('/debug_echo')
+async def debug_echo(request: Request):
+    try:
+        headers = dict(request.headers)
+        body = await request.body()
+        preview = body[:1024].decode('utf-8', errors='replace')
+        logging.info("debug_echo headers=%s", headers)
+        logging.info("debug_echo body_preview=%s", preview)
+        return JSONResponse(status_code=200, content={"ok": True, "headers": headers, "body_preview": preview})
+    except Exception as e:
+        logging.exception('debug_echo failed')
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 
 @app.get("/health")
@@ -332,4 +450,3 @@ async def health():
 async def ping():
     """Simple reachability check for clients."""
     return JSONResponse(status_code=200, content={"ok": True, "service": "scananddiscover"})
- 

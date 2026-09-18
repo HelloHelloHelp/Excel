@@ -98,6 +98,51 @@ def recognize_text_from_image(image):
     return ""
 
 
+def read_text(image):
+    """Compatibility wrapper used elsewhere in the codebase."""
+    try:
+        return recognize_text_from_image(image)
+    except Exception:
+        return ""
+
+
+# Stubs and helpers to avoid undefined symbol warnings and provide simple fallbacks
+def search_wikipedia(query, top_k=3):
+    """Simple Wikipedia search fallback used by camera module."""
+    if not query:
+        return []
+    try:
+        params = {"action": "query", "list": "search", "srsearch": query, "format": "json", "srlimit": top_k}
+        r = requests.get("https://en.wikipedia.org/w/api.php", params=params, timeout=8)
+        r.raise_for_status()
+        data = r.json()
+        results = []
+        for s in data.get("query", {}).get("search", [])[:top_k]:
+            title = s.get("title")
+            snippet = s.get("snippet")
+            url = f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
+            results.append({"title": title, "snippet": snippet, "url": url})
+        return results
+    except Exception:
+        return []
+
+
+def get_wikipedia_page(title):
+    """Return a simple Wikipedia page reference for a title."""
+    if not title:
+        return {"title": "", "url": "", "snippet": ""}
+    return {"title": title, "url": f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}", "snippet": ""}
+
+
+def get_wikidata_information(q):
+    """Placeholder for Wikidata lookup. Returns empty dict for now."""
+    try:
+        # Implement real Wikidata queries later
+        return {}
+    except Exception:
+        return {}
+
+
 # ============================================================
 # IDENTIFICATION
 # ============================================================
