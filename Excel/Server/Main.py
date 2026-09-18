@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import pathlib
 import cv2
 import numpy as np
@@ -7,6 +8,7 @@ from ultralytics import YOLO
 
 # Added imports
 import os
+import logging
 import requests
 try:
     import pytesseract
@@ -16,14 +18,26 @@ except Exception:
 
 app = FastAPI()
 
+# Enable simple CORS for development (restrict in production)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Basic logging
+logging.basicConfig(level=logging.INFO)
+
 # Load YOLO once when the server starts
 model = YOLO("yolo11n.pt")
 
 
 @app.get("/", response_class=FileResponse)
 async def home():
-    # Resolve index.html next to this file in ./static/index.html
-    index_path = pathlib.Path(__file__).resolve().parent / "static" / "index.html"
+    # Resolve index.html next to this file in ./Server/index.html
+    index_path = pathlib.Path(__file__).resolve().parent / "Server" / "index.html"
     return FileResponse(index_path, media_type="text/html")
 
 
@@ -31,46 +45,8 @@ async def home():
 BING_API_KEY = os.environ.get("BING_API_KEY")
 
 
-def bing_visual_search(image_bytes, top_k=5):
-    """Call Bing Visual Search with image bytes. Return list of dicts with name/snippet/url."""
-    if not BING_API_KEY or not image_bytes:
-        return []
-    try:
-        url = "https://api.bing.microsoft.com/v7.0/images/visualsearch"
-        headers = {"Ocp-Apim-Subscription-Key": BING_API_KEY}
-        files = {
-            'image': ('image.jpg', image_bytes, 'application/octet-stream')
-        }
-        r = requests.post(url, headers=headers, files=files, timeout=20)
-        r.raise_for_status()
-        data = r.json()
-        results = []
-        # Parse tags -> actions -> data -> value
-        for tag in data.get('tags', []):
-            for action in tag.get('actions', []):
-                data_nodes = action.get('data', {})
-                values = data_nodes.get('value', []) if isinstance(data_nodes, dict) else []
-                for v in values:
-                    name = v.get('name') or v.get('hostPageDisplayUrl') or v.get('accentColor')
-                    snippet = v.get('snippet') if isinstance(v.get('snippet'), str) else ''
-                    urlv = v.get('hostPageDisplayUrl') or v.get('contentUrl') or v.get('webSearchUrl')
-                    results.append({"name": name, "snippet": snippet, "url": urlv})
-                    if len(results) >= top_k:
-                        return results
-        return results
-    except Exception:
-        return []
-
-
-def web_search(query, top_k=3, image_bytes=None):
-    """If image_bytes provided and Bing key available, try visual search first.
-    Otherwise prefer Bing Web Search (if key) then fallback to Wikipedia."""
+def web_search(query, top_k=3):
     docs = []
-    if image_bytes and BING_API_KEY:
-        vs = bing_visual_search(image_bytes, top_k=top_k)
-        if vs:
-            return vs
-
     if not query:
         return docs
 
@@ -85,6 +61,7 @@ def web_search(query, top_k=3, image_bytes=None):
                 docs.append({"name": item.get("name"), "snippet": item.get("snippet"), "url": item.get("url")})
             return docs
         except Exception:
+            # fall through to Wikipedia fallback
             pass
 
     # Wikipedia fallback
@@ -105,7 +82,7 @@ def web_search(query, top_k=3, image_bytes=None):
 
 
 @app.post("/scan")
-async def scan(file: UploadFile = File(...)
+async def scan(file: UploadFile = File(...)):
     if pytesseract is None:
         return {"success": False, "message": "pytesseract not available: install pytesseract and Tesseract engine"}
 
@@ -158,13 +135,6 @@ async def scan(file: UploadFile = File(...)
                     continue
                 crop = frame[y1:y2, x1:x2]
 
-                # Encode crop to bytes for visual search if needed
-                try:
-                    _, crop_jpg = cv2.imencode('.jpg', crop)
-                    crop_bytes = crop_jpg.tobytes()
-                except Exception:
-                    crop_bytes = None
-
                 # OCR on crop (BGR -> RGB)
                 try:
                     pil_img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
@@ -190,26 +160,16 @@ async def scan(file: UploadFile = File(...)
                 query = ""
                 if ocr_text and len(ocr_text) >= 3:
                     query = ocr_text
+                elif class_name:
+                    query = class_name
 
-                web_results = []
-                # If OCR gave a query use that to search web; otherwise try visual search with the crop
-                if query:
-                    web_results = web_search(query, top_k=3, image_bytes=None)
-                    # if web results empty and we have image, try visual search
-                    if not web_results and crop_bytes:
-                        web_results = web_search(None, top_k=3, image_bytes=crop_bytes)
-                else:
-                    # No OCR text: try visual search (Bing) first, fallback to class name text search
-                    if crop_bytes and BING_API_KEY:
-                        web_results = web_search(None, top_k=3, image_bytes=crop_bytes)
-                    if not web_results and class_name:
-                        web_results = web_search(class_name, top_k=3, image_bytes=None)
+                web_results = web_search(query) if query else []
 
                 det = {
                     "class": class_name,
                     "confidence": round(confidence, 3) if confidence is not None else None,
                     "ocr": ocr_text,
-                    "query_used": query if query else ("visual_search" if (crop_bytes and BING_API_KEY) else class_name),
+                    "query_used": query,
                     "web_results": web_results
                 }
                 output["detections"].append(det)
@@ -217,5 +177,5 @@ async def scan(file: UploadFile = File(...)
         return {"success": True, "data": output}
 
     except Exception as error:
-        print("Scan error:", error)
-        return {"success": False, "message": str(error)}
+        logging.exception("Scan error")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(error)})
