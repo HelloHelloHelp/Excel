@@ -179,3 +179,21 @@ async def scan(file: UploadFile = File(...)):
     except Exception as error:
         logging.exception("Scan error")
         return JSONResponse(status_code=500, content={"success": False, "message": str(error)})
+
+
+@app.get("/health")
+async def health():
+    """Health endpoint: checks internet, Bing key, OCR and model status."""
+    try:
+        inet = connect.check_internet()
+    except Exception as e:
+        inet = {"ok": False, "error": str(e)}
+
+    status = {
+        "internet": inet,
+        "bing_api_key_present": bool(connect.BING_API_KEY),
+        "pytesseract_available": pytesseract is not None,
+        "model_loaded": model is not None,
+    }
+
+    return JSONResponse(status_code=200, content={"status": "ok", "details": status})

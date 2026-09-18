@@ -22,6 +22,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Server\camera.py" />
+    <Compile Include="Server\connect.py" />
     <Compile Include="Server\Main.py" />
     <Compile Include="Server\recognize.py" />
     <Compile Include="Server\server.py">
