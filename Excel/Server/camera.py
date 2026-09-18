@@ -15,7 +15,16 @@ except Exception:
     Image = None
 
 # 'connect' provides visual search and web search
-from . import connect
+try:
+    # Preferred: package import when running as package
+    from Excel.Server import connect
+except Exception:
+    try:
+        # Relative import when running as package/module
+        from . import connect
+    except Exception:
+        # Fallback: plain import when running as a flat module
+        import connect
 
 
 def process_image_bytes(image_bytes):
