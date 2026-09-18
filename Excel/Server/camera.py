@@ -463,14 +463,14 @@ def process_image(image_bytes):
                         debug['exceptions'].append({'stage': 'ocr_space', 'trace': tb})
 
             debug['ocr_text'] = text
-                if text:
-                    stext = connect.search(query=text, image_bytes=None, top_k=5)
-                    ok = bool(stext.get('success') and stext.get('results'))
-                    count = len(stext.get('results') or [])
-                    debug['ocr_search'] = {'success': ok, 'count': count}
-                    if ok:
-                        label, logo, conf = interpret_web_results(stext.get('results'))
-                        return {'success': True, 'data': _make_result(label=label, confidence_score=conf, source='ocr', logo=logo, debug={'ocr': text, 'web_count': count}), 'debug': debug}
+            if text:
+                stext = connect.search(query=text, image_bytes=None, top_k=5)
+                ok = bool(stext.get('success') and stext.get('results'))
+                count = len(stext.get('results') or [])
+                debug['ocr_search'] = {'success': ok, 'count': count}
+                if ok:
+                    label, logo, conf = interpret_web_results(stext.get('results'))
+                    return {'success': True, 'data': _make_result(label=label, confidence_score=conf, source='ocr', logo=logo, debug={'ocr': text, 'web_count': count}), 'debug': debug}
         except Exception:
             tb = traceback.format_exc()
             logging.exception('OCR/text search failed')

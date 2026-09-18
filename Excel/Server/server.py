@@ -7,7 +7,7 @@ import base64
 import json
 import os
 
-# Import process_image from camera. Try relative import first, fall back to absolute.
+# Attempt relative import first (for local dev) then absolute for uvicorn run-from-root
 try:
     from .camera import process_image
 except Exception:
