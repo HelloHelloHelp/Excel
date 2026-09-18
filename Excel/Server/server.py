@@ -1,103 +1,36 @@
-from pathlib import Path
-import logging
-
 from fastapi import FastAPI, UploadFile, File, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+import logging
+import pathlib
+import base64
+import json
+import os
 
+# Import process_image from camera. Try relative import first, fall back to absolute.
 try:
-    # Try relative import (when run as package)
     from .camera import process_image
 except Exception:
-    # Fallback to absolute import (when run as module)
     from camera import process_image
 
+app = FastAPI()
 
-app = FastAPI(title="Scan & Discover")
+# Allow CORS for the web UI
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
+ROOT_DIR = pathlib.Path(__file__).resolve().parent
 
-BASE_DIR = Path(__file__).resolve().parent
-
-
-# ============================================================
-# HOME PAGE
-# ============================================================
 
 @app.get("/")
-async def home():
-
-    return FileResponse(
-        BASE_DIR / "index.html"
-    )
-
-
-# ============================================================
-# STYLE
-# ============================================================
-
-@app.get("/style.css")
-async def style():
-
-    return FileResponse(
-        BASE_DIR / "style.css"
-    )
-
-
-# ============================================================
-# SCAN
-# ============================================================
-
-@app.post("/scan")
-async def scan(
-    file: UploadFile = File(...)
-):
-
-    try:
-
-        image_data = await file.read()
-
-        if not image_data:
-
-            raise ValueError(
-                "The photo is empty."
-            )
-
-        print(
-            "Photo received successfully."
-        )
-
-        result = process_image(
-            image_data
-        )
-
-        return JSONResponse({
-
-            "success": True,
-
-            "message": result["message"],
-
-            "objects": result["objects"],
-
-            "ocr": result["ocr"],
-
-            "information": result["information"]
-
-        })
-
-
-    except Exception as error:
-
-        print(
-            "SCAN ERROR:",
-            error
-        )
-
-        return JSONResponse({
-
-            "success": False,
-
-            "message": str(error)
-
-        })
+async def index():
+    html_path = ROOT_DIR / "index.html"
+    return FileResponse(html_path)
 
 
 @app.post('/process')
@@ -108,4 +41,25 @@ async def process(request: Request, file: UploadFile = File(...)):
         return JSONResponse(status_code=200, content=res)
     except Exception as e:
         logging.exception('processing failed')
+        return JSONResponse(status_code=500, content={'success': False, 'message': str(e)})
+
+
+@app.post('/scan_json')
+async def scan_json(request: Request):
+    """Accept JSON {"image":"data:image/...;base64,...."} and return process_image output directly."""
+    try:
+        body = await request.body()
+        payload = json.loads(body.decode('utf-8'))
+        img_b64 = payload.get('image')
+        if not img_b64:
+            return JSONResponse(status_code=400, content={'success': False, 'message': 'no image field'})
+        if ',' in img_b64:
+            img_b64 = img_b64.split(',', 1)[1]
+        img_bytes = base64.b64decode(img_b64)
+
+        res = process_image(img_bytes)
+        # Return whatever process_image returns, including debug info
+        return JSONResponse(status_code=200, content=res)
+    except Exception as e:
+        logging.exception('scan_json failed')
         return JSONResponse(status_code=500, content={'success': False, 'message': str(e)})

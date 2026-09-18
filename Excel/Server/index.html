@@ -445,7 +445,6 @@
                             /* ==============================
                                SHOW RESULT
                                ============================== */
-
                             if (data.success) {
 
 
@@ -466,6 +465,19 @@
 
                                 }
 
+                                else if (data.data) {
+
+
+                                    // Show full data payload for diagnosis when there are no detections
+                                    result.innerText =
+                                        JSON.stringify(
+                                            data.data,
+                                            null,
+                                            2
+                                        );
+
+                                }
+
                                 else {
 
 
@@ -480,12 +492,46 @@
                             else {
 
 
-                                result.innerText =
-                                    "❌ Error: " +
-                                    (
-                                        data.message ||
-                                        "Unknown error"
-                                    );
+                                // show debug info when available to help diagnose no-match cases
+                                if (data.debug) {
+
+
+                                    result.innerText =
+                                        "No match. Debug:\n" +
+                                        JSON.stringify(
+                                            data.debug,
+                                            null,
+                                            2
+                                        );
+
+
+                                }
+
+                                else if (data.raw) {
+
+
+                                    result.innerText =
+                                        "No match. Raw response:\n" +
+                                        JSON.stringify(
+                                            data.raw,
+                                            null,
+                                            2
+                                        );
+
+
+                                }
+
+                                else {
+
+
+                                    result.innerText =
+                                        "❌ Error: " +
+                                        (
+                                            data.message ||
+                                            "Unknown error"
+                                        );
+
+                                }
 
                             }
 

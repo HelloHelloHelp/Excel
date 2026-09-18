@@ -2,6 +2,7 @@ import os
 import cv2
 import numpy as np
 import logging
+import traceback
 
 # Lightweight camera processing that avoids importing heavy ML libs at import time.
 # Local YOLO usage is only enabled when USE_LOCAL_MODEL=1.
@@ -119,9 +120,79 @@ def process_image(image_bytes):
     if USE_LOCAL:
         try:
             out = process_image_with_local_model(frame)
-            return {'success': True, 'data': out}
+            return {'success': True, 'data': out, 'debug': {'note': 'used_local_model'}}
         except Exception:
             logging.exception('local model processing failed, falling back to search-only')
             # fall through to search
-    out = process_image_search_only(frame)
-    return {'success': True, 'data': out}
+    # Perform visual-search + OCR with detailed debug info
+    debug = {
+        'full_image': None,
+        'crops': [],
+        'ocr_text': None,
+        'exceptions': []
+    }
+    try:
+        # Full-image visual search
+        try:
+            _, jpg = cv2.imencode('.jpg', frame)
+            s_full = connect.search(query=None, image_bytes=jpg.tobytes(), top_k=5)
+            ok = bool(s_full.get('success') and s_full.get('results'))
+            count = len(s_full.get('results') or [])
+            debug['full_image'] = {'success': ok, 'count': count}
+            if ok:
+                return {'success': True, 'data': {'source': 'full_image_visual', 'results': s_full.get('results')}, 'debug': debug}
+        except Exception:
+            tb = traceback.format_exc()
+            logging.exception('full-image visual search failed')
+            debug['exceptions'].append({'stage': 'full_image', 'trace': tb})
+
+        # Crops
+        crops = []
+        h, w = frame.shape[:2]
+        # center and quarter crops
+        for size in (min(160, max(64, min(h, w))), min(128, max(64, min(h, w)))):
+            cy, cx = h // 2, w // 2
+            y1 = max(0, cy - size // 2); x1 = max(0, cx - size // 2)
+            crops.append(frame[y1:y1+size, x1:x1+size])
+        qh, qw = max(10, h//4), max(10, w//4)
+        crops.append(frame[0:qh, 0:qw])
+
+        for c in crops:
+            try:
+                _, cj = cv2.imencode('.jpg', c)
+                sres = connect.search(query=None, image_bytes=cj.tobytes(), top_k=5)
+                ok = bool(sres.get('success') and sres.get('results'))
+                count = len(sres.get('results') or [])
+                debug['crops'].append({'size': c.shape[:2], 'success': ok, 'count': count})
+                if ok:
+                    return {'success': True, 'data': {'source': 'crop_visual', 'results': sres.get('results')}, 'debug': debug}
+            except Exception:
+                tb = traceback.format_exc()
+                logging.exception('crop visual search failed')
+                debug['exceptions'].append({'stage': 'crop', 'trace': tb})
+
+        # OCR fallback on the whole image
+        try:
+            if pytesseract is not None and Image is not None:
+                pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                text = pytesseract.image_to_string(pil, config='--psm 6').strip()
+                debug['ocr_text'] = text
+                if text:
+                    stext = connect.search(query=text, image_bytes=None, top_k=5)
+                    ok = bool(stext.get('success') and stext.get('results'))
+                    count = len(stext.get('results') or [])
+                    debug['ocr_search'] = {'success': ok, 'count': count}
+                    if ok:
+                        return {'success': True, 'data': {'source': 'ocr_text', 'ocr': text, 'results': stext.get('results')}, 'debug': debug}
+        except Exception:
+            tb = traceback.format_exc()
+            logging.exception('OCR/text search failed')
+            debug['exceptions'].append({'stage': 'ocr', 'trace': tb})
+
+        # Nothing matched
+        return {'success': False, 'message': 'no_match', 'debug': debug}
+
+    except Exception:
+        tb = traceback.format_exc()
+        logging.exception('unexpected error in process_image')
+        return {'success': False, 'message': 'error', 'debug': {'exceptions': [{'stage': 'unexpected', 'trace': tb}]}}
