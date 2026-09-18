@@ -28,6 +28,7 @@
     <Compile Include="Server\server.py">
       <SubType>Code</SubType>
     </Compile>
+    <Compile Include="Server\__init__.py" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="Scan&amp;Discover.txt" />

@@ -1,6 +1,8 @@
 from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import base64
 import pathlib
 import cv2
 import numpy as np
@@ -15,6 +17,12 @@ try:
     from PIL import Image
 except Exception:
     pytesseract = None
+
+# Import our connection/search helpers: prefer relative import when running as a package
+try:
+    from . import connect
+except Exception:
+    import connect
 
 app = FastAPI()
 
@@ -186,6 +194,119 @@ async def scan(request: Request, file: UploadFile = File(...)):
 
     except Exception as error:
         logging.exception("Scan error")
+        return JSONResponse(status_code=500, content={"success": False, "message": str(error)})
+
+
+class ImagePayload(BaseModel):
+    image: str
+
+
+@app.post("/scan_json")
+async def scan_json(request: Request, payload: ImagePayload):
+    """Accept JSON with a base64-encoded image string in payload.image
+    Example: {"image": "data:image/jpeg;base64,/9j/4AAQ..."}
+    """
+    if pytesseract is None:
+        return JSONResponse(status_code=500, content={"success": False, "message": "pytesseract not available"})
+
+    try:
+        logging.info("/scan_json invoked from %s", request.client.host if request.client else "-")
+
+        img_b64 = payload.image
+        # Strip data URL prefix if present
+        if "," in img_b64:
+            img_b64 = img_b64.split(",", 1)[1]
+
+        img_bytes = base64.b64decode(img_b64)
+        image_array = np.frombuffer(img_bytes, dtype=np.uint8)
+        frame = cv2.imdecode(image_array, cv2.IMREAD_COLOR)
+        if frame is None:
+            raise ValueError("Could not decode the photo.")
+
+        # Reuse the same detection logic as /scan
+        results = model(frame)
+        output = {"detections": []}
+        img_h, img_w = frame.shape[:2]
+
+        for result in results:
+            for box in result.boxes:
+                xy = None
+                try:
+                    xy = box.xyxy[0].tolist()
+                except Exception:
+                    try:
+                        xy = box.xyxy.cpu().numpy().tolist()[0]
+                    except Exception:
+                        try:
+                            xy = list(box.xyxy)
+                        except Exception:
+                            xy = None
+
+                if not xy:
+                    continue
+                x1, y1, x2, y2 = map(int, [max(0, xy[0]), max(0, xy[1]), min(img_w - 1, xy[2]), min(img_h - 1, xy[3])])
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                crop = frame[y1:y2, x1:x2]
+                try:
+                    _, crop_jpg = cv2.imencode('.jpg', crop)
+                    crop_bytes = crop_jpg.tobytes()
+                except Exception:
+                    crop_bytes = None
+
+                try:
+                    pil_img = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
+                    ocr_text = pytesseract.image_to_string(pil_img, config='--psm 6').strip()
+                except Exception:
+                    ocr_text = ""
+
+                try:
+                    class_id = int(box.cls[0])
+                except Exception:
+                    class_id = None
+                try:
+                    confidence = float(box.conf[0])
+                except Exception:
+                    confidence = None
+
+                class_name = result.names.get(class_id, str(class_id)) if class_id is not None else ""
+
+                query = ""
+                if ocr_text and len(ocr_text) >= 3:
+                    query = ocr_text
+
+                web_results = []
+                if query:
+                    s = connect.search(query=query, image_bytes=None, top_k=3)
+                    if s.get("success"):
+                        web_results = s.get("results", [])
+                    if not web_results and crop_bytes:
+                        s = connect.search(query=None, image_bytes=crop_bytes, top_k=3)
+                        if s.get("success"):
+                            web_results = s.get("results", [])
+                else:
+                    if crop_bytes:
+                        s = connect.search(query=None, image_bytes=crop_bytes, top_k=3)
+                        if s.get("success"):
+                            web_results = s.get("results", [])
+                    if not web_results and class_name:
+                        s = connect.search(query=class_name, image_bytes=None, top_k=3)
+                        if s.get("success"):
+                            web_results = s.get("results", [])
+
+                det = {
+                    "class": class_name,
+                    "confidence": round(confidence, 3) if confidence is not None else None,
+                    "ocr": ocr_text,
+                    "query_used": query if query else ("visual_search" if (crop_bytes and connect.BING_API_KEY) else class_name),
+                    "web_results": web_results,
+                }
+                output["detections"].append(det)
+
+        return JSONResponse(status_code=200, content={"success": True, "data": output})
+
+    except Exception as error:
+        logging.exception("scan_json error")
         return JSONResponse(status_code=500, content={"success": False, "message": str(error)})
 
 

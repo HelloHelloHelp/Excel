@@ -26,6 +26,22 @@ print("YOLO model loaded.")
 
 ocr_reader = None
 
+try:
+    import easyocr
+    EASY_OCR_AVAILABLE = True
+except Exception:
+    easyocr = None
+    EASY_OCR_AVAILABLE = False
+
+try:
+    import pytesseract
+    from PIL import Image
+    PYTESSERACT_AVAILABLE = True
+except Exception:
+    pytesseract = None
+    Image = None
+    PYTESSERACT_AVAILABLE = False
+
 
 def get_ocr_reader():
 
@@ -48,292 +64,38 @@ def get_ocr_reader():
     return ocr_reader
 
 
-# ============================================================
-# OCR
-# ============================================================
+def recognize_text_from_image(image):
+    """Attempt OCR using EasyOCR first, fallback to pytesseract.
 
-def read_text(image):
-
-    try:
-
-        reader = get_ocr_reader()
-
-        results = reader.readtext(image)
-
-        text_parts = []
-
-        for detection in results:
-
-            text = detection[1]
-            confidence = detection[2]
-
-            if confidence >= 0.40:
-
-                text_parts.append(text)
-
-        return " ".join(text_parts).strip()
-
-    except Exception as error:
-
-        print("OCR error:", error)
-
-        return ""
-
-
-# ============================================================
-# WIKIPEDIA SEARCH
-# ============================================================
-
-def search_wikipedia(search_text):
-
-    url = "https://en.wikipedia.org/w/api.php"
-
-    params = {
-        "action": "query",
-        "list": "search",
-        "srsearch": search_text,
-        "format": "json",
-        "utf8": 1,
-        "srlimit": 1
-    }
-
-    response = requests.get(
-        url,
-        params=params,
-        timeout=10,
-        headers={
-            "User-Agent": "ScanAndDiscover/1.0"
-        }
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    results = (
-        data
-        .get("query", {})
-        .get("search", [])
-    )
-
-    if not results:
-
-        return None
-
-    return results[0]["title"]
-
-
-# ============================================================
-# WIKIPEDIA PAGE
-# ============================================================
-
-def get_wikipedia_page(title):
-
-    url = "https://en.wikipedia.org/w/api.php"
-
-    params = {
-        "action": "query",
-        "prop": "extracts|pageprops",
-        "exintro": True,
-        "explaintext": True,
-        "titles": title,
-        "format": "json",
-        "utf8": 1
-    }
-
-    response = requests.get(
-        url,
-        params=params,
-        timeout=10,
-        headers={
-            "User-Agent": "ScanAndDiscover/1.0"
-        }
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    pages = (
-        data
-        .get("query", {})
-        .get("pages", {})
-    )
-
-    for page in pages.values():
-
-        return {
-            "title": page.get(
-                "title",
-                title
-            ),
-
-            "description": page.get(
-                "extract",
-                ""
-            ),
-
-            "wikidata_id": page.get(
-                "pageprops",
-                {}
-            ).get(
-                "wikibase_item"
-            )
-        }
-
-    return None
-
-
-# ============================================================
-# WIKIDATA
-# ============================================================
-
-def get_wikidata_information(wikidata_id):
-
-    if not wikidata_id:
-
-        return {}
-
-    url = (
-        "https://www.wikidata.org/wiki/"
-        "Special:EntityData/"
-        + wikidata_id
-        + ".json"
-    )
-
-    response = requests.get(
-        url,
-        timeout=10,
-        headers={
-            "User-Agent": "ScanAndDiscover/1.0"
-        }
-    )
-
-    response.raise_for_status()
-
-    data = response.json()
-
-    entity = (
-        data
-        .get("entities", {})
-        .get(wikidata_id)
-    )
-
-    if not entity:
-
-        return {}
-
-    claims = entity.get(
-        "claims",
-        {}
-    )
-
-    # ========================================================
-    # DATE
-    # P571 = inception
-    # ========================================================
-
-    year = None
-
-    if "P571" in claims:
-
+    Args:
+        image: OpenCV BGR image (numpy array)
+    Returns:
+        text: Recognized text (string)
+    """
+    # Try EasyOCR
+    if EASY_OCR_AVAILABLE:
         try:
-
-            value = (
-                claims["P571"][0]
-                ["mainsnak"]
-                ["datavalue"]
-                ["value"]
-                ["time"]
-            )
-
-            year = value[1:5]
-
+            # easyocr expects RGB
+            img_rgb = image[:, :, ::-1]
+            reader = easyocr.Reader(["en"], gpu=False)
+            results = reader.readtext(img_rgb)
+            # results is list of (bbox, text, confidence)
+            texts = [r[1] for r in results if r and len(r) > 1]
+            return "\n".join(texts).strip()
         except Exception:
-
             pass
 
-    # ========================================================
-    # CREATOR
-    # P170 = creator
-    # P61 = discoverer/inventor
-    # ========================================================
-
-    person_id = None
-
-    for property_id in ["P170", "P61"]:
-
-        if property_id in claims:
-
-            try:
-
-                person_id = (
-                    claims[property_id][0]
-                    ["mainsnak"]
-                    ["datavalue"]
-                    ["value"]
-                    ["id"]
-                )
-
-                break
-
-            except Exception:
-
-                pass
-
-    person_name = None
-
-    if person_id:
-
-        person_url = (
-            "https://www.wikidata.org/wiki/"
-            "Special:EntityData/"
-            + person_id
-            + ".json"
-        )
-
+    # Fallback to pytesseract
+    if PYTESSERACT_AVAILABLE and Image is not None:
         try:
-
-            person_response = requests.get(
-                person_url,
-                timeout=10,
-                headers={
-                    "User-Agent":
-                    "ScanAndDiscover/1.0"
-                }
-            )
-
-            person_response.raise_for_status()
-
-            person_data = (
-                person_response.json()
-            )
-
-            person_entity = (
-                person_data
-                ["entities"]
-                [person_id]
-            )
-
-            labels = person_entity.get(
-                "labels",
-                {}
-            )
-
-            person_name = (
-                labels
-                .get("en", {})
-                .get("value")
-            )
-
+            img_rgb = image[:, :, ::-1]
+            pil = Image.fromarray(img_rgb)
+            text = pytesseract.image_to_string(pil, config='--psm 6')
+            return text.strip()
         except Exception:
-
             pass
 
-    return {
-        "year": year,
-        "creator": person_name
-    }
+    return ""
 
 
 # ============================================================
