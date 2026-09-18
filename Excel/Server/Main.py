@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import pathlib
@@ -82,9 +82,17 @@ def web_search(query, top_k=3):
 
 
 @app.post("/scan")
-async def scan(file: UploadFile = File(...)):
+async def scan(request: Request, file: UploadFile = File(...)):
     if pytesseract is None:
         return {"success": False, "message": "pytesseract not available: install pytesseract and Tesseract engine"}
+
+    # Log incoming request basics for debugging connectivity issues
+    try:
+        content_type = request.headers.get("content-type")
+        content_length = request.headers.get("content-length")
+        logging.info("/scan invoked from %s content-type=%s content-length=%s", request.client.host if request.client else "-", content_type, content_length)
+    except Exception:
+        logging.exception("Failed to log request headers for /scan")
 
     try:
         # Read uploaded photo
@@ -197,3 +205,10 @@ async def health():
     }
 
     return JSONResponse(status_code=200, content={"status": "ok", "details": status})
+
+
+@app.get("/ping")
+async def ping():
+    """Simple reachability check for clients."""
+    return JSONResponse(status_code=200, content={"ok": True, "service": "scananddiscover"})
+ 
