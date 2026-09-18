@@ -14,7 +14,7 @@ model = YOLO("yolo11n.pt")
 @app.get("/", response_class=FileResponse)
 async def home():
     # Resolve index.html next to this file in ./static/index.html
-    index_path = pathlib.Path(__file__).resolve().parent / "static" / "index.html"
+    index_path = pathlib.Path(__file__).resolve().parent / "Server" / "index.html"
     return FileResponse(index_path, media_type="text/html")
 
 

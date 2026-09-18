@@ -4,7 +4,7 @@
     <SchemaVersion>2.0</SchemaVersion>
     <ProjectGuid>deb7407f-5d31-46ad-97b8-d55b427ffbff</ProjectGuid>
     <ProjectHome>.</ProjectHome>
-    <StartupFile>Main.py</StartupFile>
+    <StartupFile>Server\Main.py</StartupFile>
     <SearchPath>
     </SearchPath>
     <WorkingDirectory>.</WorkingDirectory>
@@ -22,7 +22,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="Server\camera.py" />
-    <Compile Include="Main.py" />
+    <Compile Include="Server\Main.py" />
     <Compile Include="Server\recognize.py" />
     <Compile Include="Server\server.py">
       <SubType>Code</SubType>
@@ -31,11 +31,10 @@
   <ItemGroup>
     <Content Include="Scan&amp;Discover.txt" />
     <Content Include="Server\requirements.txt" />
-    <Content Include="static\index.html" />
+    <Content Include="Server\index.html" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="Server\" />
-    <Folder Include="static\" />
   </ItemGroup>
   <Import Project="$(MSBuildExtensionsPath32)\Microsoft\VisualStudio\v$(VisualStudioVersion)\Python Tools\Microsoft.PythonTools.targets" />
   <!-- Uncomment the CoreCompile target to enable the Build command in
