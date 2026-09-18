@@ -63,3 +63,19 @@ async def scan_json(request: Request):
     except Exception as e:
         logging.exception('scan_json failed')
         return JSONResponse(status_code=500, content={'success': False, 'message': str(e)})
+
+
+@app.post('/upload_template')
+async def upload_template(file: UploadFile = File(...)):
+    """Upload a small template image (e.g., hp logo) to ./templates/hp_logo.png"""
+    try:
+        content = await file.read()
+        tpl_dir = ROOT_DIR / 'templates'
+        tpl_dir.mkdir(parents=True, exist_ok=True)
+        tpl_path = tpl_dir / 'hp_logo.png'
+        with open(tpl_path, 'wb') as f:
+            f.write(content)
+        return JSONResponse(status_code=200, content={'success': True, 'message': 'template uploaded', 'path': str(tpl_path)})
+    except Exception as e:
+        logging.exception('upload_template failed')
+        return JSONResponse(status_code=500, content={'success': False, 'message': str(e)})

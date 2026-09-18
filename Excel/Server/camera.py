@@ -74,10 +74,29 @@ def detect_keyboard(frame):
                     key_like += 1
                     areas.append(area)
         # Heuristic: keyboards have many small key-like contours
-        if key_like >= 20:
-            # confidence scaled to number of keys
-            conf = min(0.95, 0.02 * key_like)
-            return True, round(conf, 2)
+        if key_like >= 12:
+            # further check: cluster by row
+            ys = []
+            for c in contours:
+                x, y, cw, ch = cv2.boundingRect(c)
+                area = cv2.contourArea(c)
+                if area < 50 or area > (W * H * 0.2):
+                    continue
+                ar = cw / float(max(ch, 1))
+                if 0.3 <= ar <= 3.5 and cw > 6 and ch > 5:
+                    ys.append(y + ch/2)
+            if ys:
+                ys = np.array(ys)
+                # cluster by rounding to nearest 20 pixels
+                rows = {}
+                for yv in ys:
+                    row = int(round(yv / 20.0))
+                    rows.setdefault(row, 0)
+                    rows[row] += 1
+                row_counts = sorted(rows.values(), reverse=True)
+                if len(row_counts) >= 3 and row_counts[0] >= 5:
+                    conf = min(0.98, 0.03 * key_like)
+                    return True, round(conf, 2)
         return False, 0.0
     except Exception:
         logging.exception('detect_keyboard failed')
@@ -93,25 +112,74 @@ def match_logo(frame, template_path='templates/hp_logo.png'):
     try:
         if not os.path.exists(template_path):
             return False, 0.0
-        tpl = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
-        if tpl is None:
+        tpl_color = cv2.imread(template_path)
+        if tpl_color is None:
             return False, 0.0
+        tpl = cv2.cvtColor(tpl_color, cv2.COLOR_BGR2GRAY)
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        # Resize template if larger than frame
-        th, tw = tpl.shape[:2]
+
         fh, fw = gray.shape[:2]
-        if th > fh or tw > fw:
-            # scale down template
-            scale = min(fh / th, fw / tw) * 0.8
-            tpl = cv2.resize(tpl, (int(tw * scale), int(th * scale)), interpolation=cv2.INTER_AREA)
-            th, tw = tpl.shape[:2]
-        # Template matching
-        res = cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        # Confidence threshold
-        if max_val >= 0.6:
-            return True, float(max_val)
-        return False, float(max_val)
+        th, tw = tpl.shape[:2]
+
+        best_score = 0.0
+        # 1) ORB feature matching (robust to scale/rotation a bit)
+        try:
+            orb = cv2.ORB_create(500)
+            kp1, des1 = orb.detectAndCompute(tpl, None)
+            kp2, des2 = orb.detectAndCompute(gray, None)
+            if des1 is not None and des2 is not None and len(des1) >= 10 and len(des2) >= 10:
+                bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+                matches = bf.match(des1, des2)
+                matches = sorted(matches, key=lambda x: x.distance)
+                good = [m for m in matches if m.distance < 60]
+                # score normalized by template keypoints
+                if len(kp1) > 0:
+                    orb_score = min(1.0, len(good) / max(8.0, len(kp1) * 0.2))
+                else:
+                    orb_score = 0.0
+                best_score = max(best_score, orb_score)
+        except Exception:
+            logging.exception('ORB match failed')
+
+        # 2) Edge/template matching across multiple scales and small rotations
+        try:
+            tpl_edges = cv2.Canny(tpl, 50, 150)
+            frame_edges = cv2.Canny(gray, 50, 150)
+            scales = [0.5, 0.75, 1.0, 1.25]
+            angles = [-20, -10, 0, 10, 20]
+            for s in scales:
+                # resize template for scale
+                sw = max(8, int(tw * s))
+                sh = max(8, int(th * s))
+                try:
+                    tpl_s = cv2.resize(tpl_edges, (sw, sh), interpolation=cv2.INTER_AREA)
+                except Exception:
+                    continue
+                for ang in angles:
+                    if ang != 0:
+                        M = cv2.getRotationMatrix2D((sw/2, sh/2), ang, 1.0)
+                        tpl_r = cv2.warpAffine(tpl_s, M, (sw, sh), flags=cv2.INTER_LINEAR)
+                    else:
+                        tpl_r = tpl_s
+                    # Skip if template larger than frame
+                    if tpl_r.shape[0] >= frame_edges.shape[0] or tpl_r.shape[1] >= frame_edges.shape[1]:
+                        continue
+                    try:
+                        res = cv2.matchTemplate(frame_edges, tpl_r, cv2.TM_CCOEFF_NORMED)
+                        _, max_val, _, _ = cv2.minMaxLoc(res)
+                        if max_val > best_score:
+                            best_score = float(max_val)
+                    except Exception:
+                        pass
+        except Exception:
+            logging.exception('edge/template matching failed')
+
+        # Normalize best_score (edge match gives 0..1, orb_score approx 0..1)
+        conf = float(best_score)
+        # threshold: accept if conf >= 0.45 or orb found many matches
+        if conf >= 0.45:
+            return True, conf
+        return False, conf
     except Exception:
         logging.exception('match_logo failed')
         return False, 0.0
