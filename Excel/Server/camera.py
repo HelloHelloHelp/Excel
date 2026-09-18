@@ -72,22 +72,8 @@ def recognize_text_from_image(image):
     Returns:
         text: Recognized text (string)
     """
-    # Try EasyOCR lazily
-    try:
-        try:
-            import easyocr
-        except Exception:
-            easyocr = None
-        if easyocr is not None:
-            # easyocr expects RGB
-            img_rgb = image[:, :, ::-1]
-            reader = easyocr.Reader(["en"], gpu=False)
-            results = reader.readtext(img_rgb)
-            texts = [r[1] for r in results if r and len(r) > 1]
-            return "\n".join(texts).strip()
-    except Exception:
-        # fall through to pytesseract
-        pass
+    # Do NOT import easyocr to avoid loading torch on low-memory hosts.
+    # Rely on pytesseract only (lighter). Import lazily below.
 
     # Fallback to pytesseract (lazy import)
     try:

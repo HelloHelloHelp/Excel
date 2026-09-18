@@ -3,6 +3,10 @@ import os
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("MKL_NUM_THREADS", "1")
 
+# Reduce default image sizes aggressively for low-memory hosts
+DEFAULT_MAX_DIM = int(os.environ.get("MAX_DIM", "112"))
+DEFAULT_IMG_SIZE = int(os.environ.get("IMG_SIZE", "112"))
+
 from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -45,23 +49,21 @@ from . import connect
 _model = None
 
 def get_model():
+    """Load and return the YOLO model only when USE_LOCAL_MODEL=1.
+
+    This function will not import ultralytics unless explicitly enabled via
+    the USE_LOCAL_MODEL environment variable to avoid importing Torch on
+    low-memory hosts.
+    """
     global _model
+    if os.environ.get("USE_LOCAL_MODEL", "0") != "1":
+        raise RuntimeError("Local model use is disabled (USE_LOCAL_MODEL!=1)")
     if _model is None:
         from ultralytics import YOLO as _YOLO
-        # Allow overriding model via environment variable. Use a lightweight nano model by default
         model_name = os.environ.get("YOLO_MODEL", "yolo8n.pt")
         logging.info("Loading YOLO model (lazy) name=%s...", model_name)
-        try:
-            _model = _YOLO(model_name)
-            logging.info("YOLO model loaded: %s", model_name)
-        except Exception:
-            logging.exception("Failed to load configured YOLO model %s, falling back to yolo11n.pt", model_name)
-            try:
-                _model = _YOLO("yolo11n.pt")
-                logging.info("YOLO fallback model loaded: yolo11n.pt")
-            except Exception:
-                logging.exception("Failed to load fallback YOLO model")
-                raise
+        _model = _YOLO(model_name)
+        logging.info("YOLO model loaded: %s", model_name)
     return _model
 
 
@@ -176,7 +178,7 @@ async def scan(request: Request, file: UploadFile = File(...)):
             raise ValueError("Could not decode the photo.")
 
         # Resize to reduce memory (use very small max dim)
-        MAX_DIM = int(os.environ.get("MAX_DIM", "160"))
+        MAX_DIM = DEFAULT_MAX_DIM
         h, w = frame.shape[:2]
         if max(h, w) > MAX_DIM:
             scale = MAX_DIM / max(h, w)
@@ -415,7 +417,7 @@ async def scan_json(request: Request, payload: ImagePayload):
             def make_crops(img):
                 h, w = img.shape[:2]
                 crops = []
-                for size in (160, 128):
+                for size in (DEFAULT_IMG_SIZE, max(64, DEFAULT_IMG_SIZE//2)):
                     if h > 0 and w > 0:
                         cy, cx = h // 2, w // 2
                         y1 = max(0, cy - size // 2); x1 = max(0, cx - size // 2)
