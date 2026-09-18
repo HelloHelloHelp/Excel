@@ -3,6 +3,8 @@ import cv2
 import numpy as np
 import logging
 import traceback
+import os
+import requests
 
 # Lightweight camera processing that avoids importing heavy ML libs at import time.
 # Local YOLO usage is only enabled when USE_LOCAL_MODEL=1.
@@ -171,19 +173,59 @@ def process_image(image_bytes):
                 logging.exception('crop visual search failed')
                 debug['exceptions'].append({'stage': 'crop', 'trace': tb})
 
-        # OCR fallback on the whole image
+        # OCR fallback on the whole image, prefer pytesseract but fall back to OCR.space if available
         try:
+            text = ""
+            # prepare jpg bytes for remote OCR if needed
+            try:
+                _, full_jpg = cv2.imencode('.jpg', frame)
+                full_jpg_bytes = full_jpg.tobytes()
+            except Exception:
+                full_jpg_bytes = None
+
+            # Try pytesseract first if available
             if pytesseract is not None and Image is not None:
-                pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                text = pytesseract.image_to_string(pil, config='--psm 6').strip()
-                debug['ocr_text'] = text
-                if text:
-                    stext = connect.search(query=text, image_bytes=None, top_k=5)
-                    ok = bool(stext.get('success') and stext.get('results'))
-                    count = len(stext.get('results') or [])
-                    debug['ocr_search'] = {'success': ok, 'count': count}
-                    if ok:
-                        return {'success': True, 'data': {'source': 'ocr_text', 'ocr': text, 'results': stext.get('results')}, 'debug': debug}
+                try:
+                    pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    text = pytesseract.image_to_string(pil, config='--psm 6').strip()
+                except Exception as e:
+                    # If Tesseract binary missing or other error, fall back to remote OCR
+                    tb = traceback.format_exc()
+                    logging.exception('pytesseract failed')
+                    debug['exceptions'].append({'stage': 'pytesseract', 'trace': tb})
+
+            # If no local text, try OCR.Space when API key is provided
+            if (not text) and full_jpg_bytes is not None:
+                ocr_key = os.environ.get('OCR_SPACE_API_KEY')
+                if ocr_key:
+                    try:
+                        def ocr_space_api(image_bytes, api_key, language='eng'):
+                            url = 'https://api.ocr.space/parse/image'
+                            files = {'file': ('image.jpg', image_bytes)}
+                            data = {'apikey': api_key, 'language': language, 'isOverlayRequired': False}
+                            r = requests.post(url, files=files, data=data, timeout=30)
+                            r.raise_for_status()
+                            j = r.json()
+                            parsed = j.get('ParsedResults')
+                            if parsed and len(parsed) > 0:
+                                return parsed[0].get('ParsedText', '').strip()
+                            return ''
+
+                        text = ocr_space_api(full_jpg_bytes, ocr_key)
+                        debug['ocr_used'] = 'ocr_space'
+                    except Exception:
+                        tb = traceback.format_exc()
+                        logging.exception('OCR.space fallback failed')
+                        debug['exceptions'].append({'stage': 'ocr_space', 'trace': tb})
+
+            debug['ocr_text'] = text
+            if text:
+                stext = connect.search(query=text, image_bytes=None, top_k=5)
+                ok = bool(stext.get('success') and stext.get('results'))
+                count = len(stext.get('results') or [])
+                debug['ocr_search'] = {'success': ok, 'count': count}
+                if ok:
+                    return {'success': True, 'data': {'source': 'ocr_text', 'ocr': text, 'results': stext.get('results')}, 'debug': debug}
         except Exception:
             tb = traceback.format_exc()
             logging.exception('OCR/text search failed')
