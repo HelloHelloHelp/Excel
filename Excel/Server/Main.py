@@ -175,16 +175,25 @@ async def scan(request: Request, file: UploadFile = File(...)):
         if frame is None:
             raise ValueError("Could not decode the photo.")
 
-        # Resize to reduce memory (use small max dim)
-        MAX_DIM = 320
+        # Resize to reduce memory (use very small max dim)
+        MAX_DIM = int(os.environ.get("MAX_DIM", "160"))
         h, w = frame.shape[:2]
         if max(h, w) > MAX_DIM:
             scale = MAX_DIM / max(h, w)
             frame = cv2.resize(frame, (int(w*scale), int(h*scale)), interpolation=cv2.INTER_AREA)
 
-        # Run YOLO detection (lazy model)
-        model = get_model()
-        results = model(frame, imgsz=320, device='cpu')
+        # Run YOLO detection. Optionally avoid keeping model in memory between requests to reduce peak RAM.
+        KEEP_MODEL = os.environ.get('KEEP_MODEL_IN_MEMORY', '0') == '1'
+        if KEEP_MODEL:
+            model = get_model()
+        else:
+            from ultralytics import YOLO as _YOLO_local
+            model_name_local = os.environ.get("YOLO_MODEL", "yolo8n.pt")
+            model = _YOLO_local(model_name_local)
+
+        # Use small inference size to lower memory usage
+        IMG_SIZE = int(os.environ.get("IMG_SIZE", "160"))
+        results = model(frame, imgsz=IMG_SIZE, device='cpu')
 
         detected = []
 
@@ -221,8 +230,13 @@ async def scan(request: Request, file: UploadFile = File(...)):
                 + ", ".join(detected)
             )
 
-        # free memory
+        # free memory and optionally unload model
         del frame, image_array, image_data
+        if not KEEP_MODEL:
+            try:
+                del model
+            except Exception:
+                pass
         gc.collect()
 
         return {
@@ -277,7 +291,16 @@ async def scan_json(request: Request, payload: ImagePayload):
             logging.exception("full-image visual search failed")
 
         # 2) Run YOLO detections and attempt visual/text search per detection with augmentations
-        results = get_model()(frame)
+        KEEP_MODEL = os.environ.get('KEEP_MODEL_IN_MEMORY', '0') == '1'
+        if KEEP_MODEL:
+            model_obj = get_model()
+        else:
+            from ultralytics import YOLO as _YOLO_local
+            model_name_local = os.environ.get("YOLO_MODEL", "yolo8n.pt")
+            model_obj = _YOLO_local(model_name_local)
+
+        IMG_SIZE = int(os.environ.get("IMG_SIZE", "160"))
+        results = model_obj(frame, imgsz=IMG_SIZE, device='cpu')
         output = {"detections": []}
 
         def augment_crops(crop):
@@ -447,8 +470,13 @@ async def scan_json(request: Request, payload: ImagePayload):
                 gc.collect()
                 return JSONResponse(status_code=200, content={"success": True, "data": {"source": "fallback_text", "results": fallback_results, "detections": output}})
 
-        # free memory
+        # free memory and optionally unload model
         del frame, image_array, img_bytes
+        if not KEEP_MODEL:
+            try:
+                del model_obj
+            except Exception:
+                pass
         gc.collect()
         return JSONResponse(status_code=200, content={"success": True, "data": {"source": "per_detection", "detections": output}})
 
