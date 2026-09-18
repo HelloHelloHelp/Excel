@@ -1,9 +1,15 @@
 from pathlib import Path
+import logging
 
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from camera import process_image
+try:
+    # Try relative import (when run as package)
+    from .camera import process_image
+except Exception:
+    # Fallback to absolute import (when run as module)
+    from camera import process_image
 
 
 app = FastAPI(title="Scan & Discover")
@@ -92,3 +98,14 @@ async def scan(
             "message": str(error)
 
         })
+
+
+@app.post('/process')
+async def process(request: Request, file: UploadFile = File(...)):
+    try:
+        data = await file.read()
+        res = process_image(data)
+        return JSONResponse(status_code=200, content=res)
+    except Exception as e:
+        logging.exception('processing failed')
+        return JSONResponse(status_code=500, content={'success': False, 'message': str(e)})

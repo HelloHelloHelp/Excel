@@ -1,498 +1,118 @@
+import os
 import cv2
 import numpy as np
+import logging
 
-from ultralytics import YOLO
-
-import requests
-
-
-# ============================================================
-# YOLO MODEL
-# ============================================================
-
-print("Loading YOLO model...")
-
-model = YOLO("yolo11n.pt")
-
-print("YOLO model loaded.")
-
-
-# ============================================================
-# OCR
-# ============================================================
-
-# Do NOT load EasyOCR when the server starts.
-# This saves RAM during Render startup.
-
-ocr_reader = None
-
-try:
-    import easyocr
-    EASY_OCR_AVAILABLE = True
-except Exception:
-    easyocr = None
-    EASY_OCR_AVAILABLE = False
+# Lightweight camera processing that avoids importing heavy ML libs at import time.
+# Local YOLO usage is only enabled when USE_LOCAL_MODEL=1.
+USE_LOCAL = os.environ.get("USE_LOCAL_MODEL", "0") == "1"
 
 try:
     import pytesseract
     from PIL import Image
-    PYTESSERACT_AVAILABLE = True
 except Exception:
     pytesseract = None
     Image = None
-    PYTESSERACT_AVAILABLE = False
+
+# 'connect' provides visual search and web search
+from . import connect
 
 
-def get_ocr_reader():
-
-    global ocr_reader
-
-    if ocr_reader is None:
-
-        print("Loading EasyOCR...")
-
-        import easyocr
-
-        ocr_reader = easyocr.Reader(
-            ["en"],
-            gpu=False,
-            verbose=False
-        )
-
-        print("EasyOCR loaded.")
-
-    return ocr_reader
+def process_image_bytes(image_bytes):
+    """Decode image bytes to OpenCV BGR image and return it."""
+    arr = np.frombuffer(image_bytes, dtype=np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    return img
 
 
-def recognize_text_from_image(image):
-    """Attempt OCR using EasyOCR first (imported lazily), fallback to pytesseract.
-
-    Args:
-        image: OpenCV BGR image (numpy array)
-    Returns:
-        text: Recognized text (string)
-    """
-    # Do NOT import easyocr to avoid loading torch on low-memory hosts.
-    # Rely on pytesseract only (lighter). Import lazily below.
-
-    # Fallback to pytesseract (lazy import)
+def process_image_search_only(frame):
+    """Perform visual-search + OCR on the frame and return results without local model."""
+    results = {"detections": []}
+    img_h, img_w = frame.shape[:2]
+    # Try full-image visual search
     try:
-        import pytesseract
-        from PIL import Image as PILImage
-        img_rgb = image[:, :, ::-1]
-        pil = PILImage.fromarray(img_rgb)
-        text = pytesseract.image_to_string(pil, config='--psm 6')
-        return text.strip()
+        _, jpg = cv2.imencode('.jpg', frame)
+        s_full = connect.search(query=None, image_bytes=jpg.tobytes(), top_k=5)
+        if s_full.get('success') and s_full.get('results'):
+            results['detections'].append({'source': 'full_image_visual', 'web_results': s_full.get('results')})
+            return results
     except Exception:
-        return ""
+        logging.exception('full-image visual search failed')
 
+    # Try a couple of crops
+    crops = []
+    sz = min(160, max(64, min(img_h, img_w)))
+    cy, cx = img_h // 2, img_w // 2
+    y1 = max(0, cy - sz // 2); x1 = max(0, cx - sz // 2)
+    crops.append(frame[y1:y1+sz, x1:x1+sz])
+    qh, qw = max(10, img_h//4), max(10, img_w//4)
+    crops.append(frame[0:qh, 0:qw])
 
-def read_text(image):
-    """Compatibility wrapper used elsewhere in the codebase."""
+    for c in crops:
+        try:
+            _, cj = cv2.imencode('.jpg', c)
+            sres = connect.search(query=None, image_bytes=cj.tobytes(), top_k=5)
+            if sres.get('success') and sres.get('results'):
+                results['detections'].append({'source': 'crop_visual', 'web_results': sres.get('results')})
+                return results
+        except Exception:
+            logging.exception('crop visual search failed')
+
+    # OCR fallback
     try:
-        return recognize_text_from_image(image)
+        if pytesseract is not None and Image is not None:
+            pil = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            text = pytesseract.image_to_string(pil, config='--psm 6').strip()
+            if text:
+                stext = connect.search(query=text, image_bytes=None, top_k=5)
+                if stext.get('success') and stext.get('results'):
+                    results['detections'].append({'source': 'ocr_text', 'ocr': text, 'web_results': stext.get('results')})
+                    return results
     except Exception:
-        return ""
+        logging.exception('ocr fallback failed')
+
+    return results
 
 
-# --- Helper stubs to avoid undefined symbol warnings and provide simple fallbacks ---
-
-def search_wikipedia(query, top_k=3):
-    """Simple Wikipedia search fallback used by camera module."""
-    if not query:
-        return []
-    try:
-        params = {"action": "query", "list": "search", "srsearch": query, "format": "json", "srlimit": top_k}
-        r = requests.get("https://en.wikipedia.org/w/api.php", params=params, timeout=8)
-        r.raise_for_status()
-        data = r.json()
-        results = []
-        for s in data.get("query", {}).get("search", [])[:top_k]:
-            title = s.get("title")
-            snippet = s.get("snippet")
-            url = f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}"
-            results.append({"title": title, "snippet": snippet, "url": url})
-        return results
-    except Exception:
-        return []
-
-
-def get_wikipedia_page(title):
-    """Return a simple Wikipedia page reference for a title."""
-    if not title:
-        return {"title": "", "url": "", "snippet": ""}
-    return {"title": title, "url": f"https://en.wikipedia.org/wiki/{title.replace(' ', '_')}", "snippet": ""}
+def process_image_with_local_model(frame):
+    """Run local YOLO if enabled. This imports ultralytics lazily and is only used when USE_LOCAL==True."""
+    if not USE_LOCAL:
+        raise RuntimeError('Local model disabled')
+    # Lazy import of ultralytics to avoid import at module load
+    from ultralytics import YOLO
+    model_name = os.environ.get('YOLO_MODEL', 'yolo8n.pt')
+    model = YOLO(model_name)
+    # small imgsz
+    imgsz = int(os.environ.get('IMG_SIZE', '112'))
+    results = model(frame, imgsz=imgsz, device='cpu')
+    detections = []
+    for res in results:
+        for box in res.boxes:
+            try:
+                class_id = int(box.cls[0])
+            except Exception:
+                class_id = None
+            try:
+                conf = float(box.conf[0])
+            except Exception:
+                conf = None
+            name = res.names.get(class_id, str(class_id)) if class_id is not None else ''
+            detections.append({'class': name, 'confidence': conf})
+    return {'detections': detections}
 
 
-def get_wikidata_information(q):
-    """Placeholder for Wikidata lookup. Returns empty dict for now."""
-    try:
-        # Implement real Wikidata queries later
-        return {}
-    except Exception:
-        return {}
-
-
-# ============================================================
-# IDENTIFICATION
-# ============================================================
-
-def identify_object(
-    ocr_text,
-    yolo_objects
-):
-
-    search_text = ""
-
-    # ========================================================
-    # OCR TEXT
-    # ========================================================
-
-    if ocr_text:
-
-        lines = []
-
-        for line in ocr_text.splitlines():
-
-            line = line.strip()
-
-            if len(line) >= 3:
-
-                lines.append(line)
-
-        if lines:
-
-            search_text = " ".join(
-                lines[:5]
-            )
-
-    # ========================================================
-    # YOLO FALLBACK
-    # ========================================================
-
-    if (
-        not search_text
-        and yolo_objects
-    ):
-
-        search_text = " ".join(
-            yolo_objects[:3]
-        )
-
-    if not search_text:
-
-        return None
-
-    print(
-        "Searching Wikipedia for:",
-        search_text
-    )
-
-    try:
-
-        title = search_wikipedia(
-            search_text
-        )
-
-        if not title:
-
-            return None
-
-        page = get_wikipedia_page(
-            title
-        )
-
-        if not page:
-
-            return None
-
-        wikidata = (
-            get_wikidata_information(
-                page.get("wikidata_id")
-            )
-        )
-
-        return {
-
-            "name": page.get(
-                "title"
-            ),
-
-            "history": page.get(
-                "description"
-            ),
-
-            "year": wikidata.get(
-                "year"
-            ),
-
-            "creator": wikidata.get(
-                "creator"
-            )
-        }
-
-    except Exception as error:
-
-        print(
-            "Information lookup error:",
-            error
-        )
-
-        return None
-
-
-# ============================================================
-# PROCESS IMAGE
-# ============================================================
-
-def process_image(image_data):
-
-    # ========================================================
-    # READ IMAGE
-    # ========================================================
-
-    image_array = np.frombuffer(
-        image_data,
-        dtype=np.uint8
-    )
-
-    frame = cv2.imdecode(
-        image_array,
-        cv2.IMREAD_COLOR
-    )
-
+def process_image(image_bytes):
+    """Main entry used by server: given image bytes return detection/search results."""
+    frame = process_image_bytes(image_bytes)
     if frame is None:
-
-        raise ValueError(
-            "Could not decode image."
-        )
-
-    print(
-        "Image received successfully."
-    )
-
-    print(
-        "Original image size:",
-        frame.shape
-    )
-
-    # ========================================================
-    # REDUCE LARGE PHONE IMAGES
-    # ========================================================
-
-    MAX_SIZE = 1280
-
-    original_max_size = max(
-        frame.shape[:2]
-    )
-
-    if original_max_size > MAX_SIZE:
-
-        scale = (
-            MAX_SIZE /
-            original_max_size
-        )
-
-        new_width = int(
-            frame.shape[1] * scale
-        )
-
-        new_height = int(
-            frame.shape[0] * scale
-        )
-
-        frame = cv2.resize(
-            frame,
-            (
-                new_width,
-                new_height
-            ),
-            interpolation=cv2.INTER_AREA
-        )
-
-    print(
-        "Image size after resizing:",
-        frame.shape
-    )
-
-    # ========================================================
-    # YOLO
-    # ========================================================
-
-    print("Running YOLO...")
-
-    results = model(
-        frame,
-        verbose=False
-    )
-
-    yolo_objects = []
-
-    for result in results:
-
-        for box in result.boxes:
-
-            confidence = float(
-                box.conf[0]
-            )
-
-            if confidence < 0.40:
-
-                continue
-
-            class_id = int(
-                box.cls[0]
-            )
-
-            name = result.names[
-                class_id
-            ]
-
-            yolo_objects.append(
-                name
-            )
-
-    # ========================================================
-    # REMOVE DUPLICATES
-    # ========================================================
-
-    yolo_objects = list(
-        dict.fromkeys(
-            yolo_objects
-        )
-    )
-
-    print(
-        "YOLO:",
-        yolo_objects
-    )
-
-    # ========================================================
-    # OCR
-    # ========================================================
-
-    print("Running OCR...")
-
-    ocr_text = read_text(
-        frame
-    )
-
-    print(
-        "OCR:",
-        ocr_text
-    )
-
-    # ========================================================
-    # INFORMATION LOOKUP
-    # ========================================================
-
-    information = identify_object(
-        ocr_text,
-        yolo_objects
-    )
-
-    # ========================================================
-    # BUILD RESULT
-    # ========================================================
-
-    lines = []
-
-    # ========================================================
-    # OBJECTS
-    # ========================================================
-
-    if yolo_objects:
-
-        lines.append(
-            "🤖 Objects detected:"
-        )
-
-        for obj in yolo_objects:
-
-            lines.append(
-                f"• {obj}"
-            )
-
-        lines.append("")
-
-    # ========================================================
-    # OCR
-    # ========================================================
-
-    if ocr_text:
-
-        lines.append(
-            "🔤 Text found:"
-        )
-
-        lines.append(
-            ocr_text
-        )
-
-        lines.append("")
-
-    # ========================================================
-    # INFORMATION
-    # ========================================================
-
-    if information:
-
-        lines.append(
-            "📚 Information:"
-        )
-
-        lines.append(
-            f"Name: {information['name']}"
-        )
-
-        if information.get("year"):
-
-            lines.append(
-                f"Year: {information['year']}"
-            )
-
-        if information.get("creator"):
-
-            lines.append(
-                "Creator / inventor: "
-                + information["creator"]
-            )
-
-        lines.append("")
-
-        if information.get("history"):
-
-            lines.append(
-                "History:"
-            )
-
-            lines.append(
-                information["history"]
-            )
-
-    else:
-
-        lines.append(
-            "ℹ️ I could not find reliable "
-            "historical information for "
-            "this object."
-        )
-
-    # ========================================================
-    # FINAL MESSAGE
-    # ========================================================
-
-    message = "\n".join(
-        lines
-    )
-
-    return {
-
-        "message": message,
-
-        "objects": yolo_objects,
-
-        "ocr": ocr_text,
-
-        "information": information
-    }
+        return {'success': False, 'message': 'Could not decode image'}
+
+    if USE_LOCAL:
+        try:
+            out = process_image_with_local_model(frame)
+            return {'success': True, 'data': out}
+        except Exception:
+            logging.exception('local model processing failed, falling back to search-only')
+            # fall through to search
+    out = process_image_search_only(frame)
+    return {'success': True, 'data': out}
