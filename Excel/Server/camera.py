@@ -3,7 +3,6 @@ import cv2
 import numpy as np
 import logging
 import traceback
-import os
 import requests
 
 # Lightweight camera processing that avoids importing heavy ML libs at import time.
@@ -35,6 +34,87 @@ def process_image_bytes(image_bytes):
     arr = np.frombuffer(image_bytes, dtype=np.uint8)
     img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
     return img
+
+
+# Heuristic keyboard detector using contour analysis
+def detect_keyboard(frame):
+    """Return (match:bool, confidence:float) if the frame likely contains a keyboard.
+
+    Strategy: detect many small rectangular key-shaped contours arranged in rows.
+    """
+    try:
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # downscale for speed
+        h, w = gray.shape[:2]
+        scale = 600.0 / max(h, w) if max(h, w) > 600 else 1.0
+        if scale != 1.0:
+            gray = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        # Adaptive threshold to highlight keys
+        blur = cv2.GaussianBlur(gray, (5, 5), 0)
+        th = cv2.adaptiveThreshold(blur, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 15, 8)
+        # Morphology to join key areas
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        morph = cv2.morphologyEx(th, cv2.MORPH_CLOSE, kernel, iterations=1)
+        # Find contours
+        contours, _ = cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # Filter contours that look like keys
+        key_like = 0
+        areas = []
+        H, W = morph.shape[:2]
+        for c in contours:
+            area = cv2.contourArea(c)
+            if area < 50 or area > (W * H * 0.2):
+                continue
+            x, y, cw, ch = cv2.boundingRect(c)
+            ar = cw / float(max(ch, 1))
+            # keys are often roughly rectangular with moderate aspect ratio
+            if 0.4 <= ar <= 3.0:
+                # exclude very thin contours
+                if cw > 8 and ch > 6:
+                    key_like += 1
+                    areas.append(area)
+        # Heuristic: keyboards have many small key-like contours
+        if key_like >= 20:
+            # confidence scaled to number of keys
+            conf = min(0.95, 0.02 * key_like)
+            return True, round(conf, 2)
+        return False, 0.0
+    except Exception:
+        logging.exception('detect_keyboard failed')
+        return False, 0.0
+
+
+# Template logo matching (simple normalized cross-correlation)
+def match_logo(frame, template_path='templates/hp_logo.png'):
+    """Return (match:bool, confidence:float) if template found in frame.
+
+    Requires a small template image at templates/hp_logo.png. If not present, returns (False,0).
+    """
+    try:
+        if not os.path.exists(template_path):
+            return False, 0.0
+        tpl = cv2.imread(template_path, cv2.IMREAD_GRAYSCALE)
+        if tpl is None:
+            return False, 0.0
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # Resize template if larger than frame
+        th, tw = tpl.shape[:2]
+        fh, fw = gray.shape[:2]
+        if th > fh or tw > fw:
+            # scale down template
+            scale = min(fh / th, fw / tw) * 0.8
+            tpl = cv2.resize(tpl, (int(tw * scale), int(th * scale)), interpolation=cv2.INTER_AREA)
+            th, tw = tpl.shape[:2]
+        # Template matching
+        res = cv2.matchTemplate(gray, tpl, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        # Confidence threshold
+        if max_val >= 0.6:
+            return True, float(max_val)
+        return False, float(max_val)
+    except Exception:
+        logging.exception('match_logo failed')
+        return False, 0.0
 
 
 def process_image_search_only(frame):
@@ -119,15 +199,53 @@ def process_image(image_bytes):
     if frame is None:
         return {'success': False, 'message': 'Could not decode image'}
 
+    # First run lightweight heuristics (logo + keyboard detector) on multiple rotations
+    debug_basic = {'rotations': []}
+    logo_found = False
+    kb_found = False
+    logo_best = (False, 0.0, 0)  # match, conf, rotation
+    kb_best = (False, 0.0, 0)
+    # try 0, 90, 270 degrees to handle rotated photos
+    rotations = [0, 90, 270]
+    for rot in rotations:
+        if rot == 0:
+            frm = frame
+        else:
+            # rotate clockwise
+            if rot == 90:
+                frm = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+            else:
+                frm = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        try:
+            logo_match, logo_conf = match_logo(frm, template_path=os.path.join(os.path.dirname(__file__), 'templates', 'hp_logo.png'))
+        except Exception:
+            logo_match, logo_conf = False, 0.0
+        try:
+            kb_match, kb_conf = detect_keyboard(frm)
+        except Exception:
+            kb_match, kb_conf = False, 0.0
+        debug_basic['rotations'].append({'rotation': rot, 'logo_match': logo_match, 'logo_conf': logo_conf, 'kb_match': kb_match, 'kb_conf': kb_conf})
+        if logo_match and logo_conf > logo_best[1]:
+            logo_best = (True, logo_conf, rot)
+        if kb_match and kb_conf > kb_best[1]:
+            kb_best = (True, kb_conf, rot)
+
+    if logo_best[0]:
+        return {'success': True, 'data': {'source': 'heuristic', 'label': 'HP keyboard', 'confidence': logo_best[1], 'rotation': logo_best[2]}, 'debug': {'heuristic': debug_basic}}
+    if kb_best[0]:
+        return {'success': True, 'data': {'source': 'heuristic', 'label': 'keyboard', 'confidence': kb_best[1], 'rotation': kb_best[2]}, 'debug': {'heuristic': debug_basic}}
+
     if USE_LOCAL:
         try:
             out = process_image_with_local_model(frame)
-            return {'success': True, 'data': out, 'debug': {'note': 'used_local_model'}}
+            return {'success': True, 'data': out, 'debug': {'note': 'used_local_model', 'heuristic': debug_basic}}
         except Exception:
             logging.exception('local model processing failed, falling back to search-only')
             # fall through to search
+
     # Perform visual-search + OCR with detailed debug info
     debug = {
+        'heuristic': debug_basic,
         'full_image': None,
         'crops': [],
         'ocr_text': None,
