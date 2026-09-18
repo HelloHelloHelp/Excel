@@ -448,16 +448,50 @@
                             if (data.success) {
 
 
-                                if (
-                                    data.data &&
-                                    data.data.detections &&
-                                    data.data.detections.length
+                                const d = data.data || {};
+
+                                // If a top-level/normalized type is provided show a concise summary
+                                if (d.type || d.normalized_type) {
+
+
+                                    const parts = [];
+                                    const typeVal = d.normalized_type || d.type || "unknown";
+                                    parts.push("type: " + typeVal);
+
+                                    if (d.confidence !== undefined && d.confidence !== null) {
+                                        let conf = d.confidence;
+                                        if (typeof conf === "number") {
+                                            // assume 0-1 -> percentage
+                                            conf = conf <= 1 ? Math.round(conf * 100) + "%" : conf + "";
+                                        }
+                                        parts.push("confidence: " + conf);
+                                    }
+
+                                    if (d.source) {
+                                        parts.push("source: " + d.source);
+                                    }
+
+                                    if (d.logo) {
+                                        parts.push("logo: " + d.logo);
+                                    }
+
+                                    // include debug when present for diagnosis
+                                    if (d.debug) {
+                                        parts.push("\ndebug: " + JSON.stringify(d.debug, null, 2));
+                                    }
+
+                                    result.innerText = parts.join("\n");
+
+
+                                } else if (
+                                    d.detections &&
+                                    d.detections.length
                                 ) {
 
 
                                     result.innerText =
                                         JSON.stringify(
-                                            data.data.detections,
+                                            d.detections,
                                             null,
                                             2
                                         );
@@ -465,13 +499,13 @@
 
                                 }
 
-                                else if (data.data) {
+                                else if (d) {
 
 
                                     // Show full data payload for diagnosis when there are no detections
                                     result.innerText =
                                         JSON.stringify(
-                                            data.data,
+                                            d,
                                             null,
                                             2
                                         );

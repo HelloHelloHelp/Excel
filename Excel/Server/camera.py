@@ -29,6 +29,54 @@ except Exception:
         import connect
 
 
+def _make_result(label=None, confidence_score=0.0, source=None, logo=None, debug=None):
+    """Return normalized result structure.
+
+    - label: string like 'keyboard' or 'product'
+    - confidence_score: float 0..1
+    - source: 'heuristic'|'visual'|'ocr'|'local'
+    - logo: string or None
+    - debug: dict
+    """
+    conf_score = float(confidence_score) if confidence_score is not None else 0.0
+    conf_percent = f"{conf_score * 100:.1f}%"
+    return {
+        'type': label,
+        'confidence': conf_percent,
+        'confidence_score': round(conf_score, 3),
+        'source': source,
+        'logo': logo,
+        'debug': debug or {}
+    }
+
+
+def interpret_web_results(results):
+    """Derive a simple label/logo/confidence from web search results (list)."""
+    if not results:
+        return None, None, 0.0
+    top = results[0]
+    name = (top.get('name') or '')
+    snippet = (top.get('snippet') or '')
+    combined = (name + ' ' + snippet).lower()
+    label = 'product'
+    logo = None
+    conf = 0.6
+    if 'keyboard' in combined:
+        label = 'keyboard'
+        conf = 0.8
+    elif 'airpod' in combined or 'air pods' in combined or 'airpods' in combined:
+        label = 'airpods'
+        conf = 0.8
+    elif 'glass' in combined or 'cup' in combined or 'mug' in combined:
+        label = 'glass'
+        conf = 0.75
+    # detect HP
+    if 'hp' in combined or 'hewlett' in combined:
+        logo = 'hp'
+        conf = max(conf, 0.85)
+    return label, logo, conf
+
+
 def process_image_bytes(image_bytes):
     """Decode image bytes to OpenCV BGR image and return it."""
     arr = np.frombuffer(image_bytes, dtype=np.uint8)
@@ -103,7 +151,7 @@ def detect_keyboard(frame):
         return False, 0.0
 
 
-# Template logo matching (simple normalized cross-correlation)
+# Template logo matching (improved ORB + edge matching)
 def match_logo(frame, template_path='templates/hp_logo.png'):
     """Return (match:bool, confidence:float) if template found in frame.
 
@@ -299,14 +347,22 @@ def process_image(image_bytes):
             kb_best = (True, kb_conf, rot)
 
     if logo_best[0]:
-        return {'success': True, 'data': {'source': 'heuristic', 'label': 'HP keyboard', 'confidence': logo_best[1], 'rotation': logo_best[2]}, 'debug': {'heuristic': debug_basic}}
+        return {'success': True, 'data': _make_result(label='keyboard', confidence_score=logo_best[1], source='heuristic', logo='hp', debug={'heuristic': debug_basic, 'rotation': logo_best[2]})}
     if kb_best[0]:
-        return {'success': True, 'data': {'source': 'heuristic', 'label': 'keyboard', 'confidence': kb_best[1], 'rotation': kb_best[2]}, 'debug': {'heuristic': debug_basic}}
+        return {'success': True, 'data': _make_result(label='keyboard', confidence_score=kb_best[1], source='heuristic', logo=None, debug={'heuristic': debug_basic, 'rotation': kb_best[2]})}
 
     if USE_LOCAL:
         try:
             out = process_image_with_local_model(frame)
-            return {'success': True, 'data': out, 'debug': {'note': 'used_local_model', 'heuristic': debug_basic}}
+            # Try to map first detection to normalized result
+            dets = out.get('detections') if isinstance(out, dict) else None
+            if dets and len(dets) > 0:
+                first = dets[0]
+                label = first.get('class') if isinstance(first, dict) else None
+                conf = first.get('confidence') or 0.0
+                conf_score = float(conf) if conf is not None else 0.0
+                return {'success': True, 'data': _make_result(label=label, confidence_score=conf_score, source='local', logo=None, debug={'note': 'used_local_model', 'heuristic': debug_basic})}
+            return {'success': True, 'data': _make_result(label=None, confidence_score=0.0, source='local', logo=None, debug={'note': 'used_local_model', 'heuristic': debug_basic})}
         except Exception:
             logging.exception('local model processing failed, falling back to search-only')
             # fall through to search
@@ -328,7 +384,8 @@ def process_image(image_bytes):
             count = len(s_full.get('results') or [])
             debug['full_image'] = {'success': ok, 'count': count}
             if ok:
-                return {'success': True, 'data': {'source': 'full_image_visual', 'results': s_full.get('results')}, 'debug': debug}
+                label, logo, conf = interpret_web_results(s_full.get('results'))
+                return {'success': True, 'data': _make_result(label=label, confidence_score=conf, source='visual', logo=logo, debug={'web': {'count': count}}), 'debug': debug}
         except Exception:
             tb = traceback.format_exc()
             logging.exception('full-image visual search failed')
@@ -353,7 +410,8 @@ def process_image(image_bytes):
                 count = len(sres.get('results') or [])
                 debug['crops'].append({'size': c.shape[:2], 'success': ok, 'count': count})
                 if ok:
-                    return {'success': True, 'data': {'source': 'crop_visual', 'results': sres.get('results')}, 'debug': debug}
+                    label, logo, conf = interpret_web_results(sres.get('results'))
+                    return {'success': True, 'data': _make_result(label=label, confidence_score=conf, source='visual', logo=logo, debug={'web': {'count': count}}), 'debug': debug}
             except Exception:
                 tb = traceback.format_exc()
                 logging.exception('crop visual search failed')
@@ -405,22 +463,23 @@ def process_image(image_bytes):
                         debug['exceptions'].append({'stage': 'ocr_space', 'trace': tb})
 
             debug['ocr_text'] = text
-            if text:
-                stext = connect.search(query=text, image_bytes=None, top_k=5)
-                ok = bool(stext.get('success') and stext.get('results'))
-                count = len(stext.get('results') or [])
-                debug['ocr_search'] = {'success': ok, 'count': count}
-                if ok:
-                    return {'success': True, 'data': {'source': 'ocr_text', 'ocr': text, 'results': stext.get('results')}, 'debug': debug}
+                if text:
+                    stext = connect.search(query=text, image_bytes=None, top_k=5)
+                    ok = bool(stext.get('success') and stext.get('results'))
+                    count = len(stext.get('results') or [])
+                    debug['ocr_search'] = {'success': ok, 'count': count}
+                    if ok:
+                        label, logo, conf = interpret_web_results(stext.get('results'))
+                        return {'success': True, 'data': _make_result(label=label, confidence_score=conf, source='ocr', logo=logo, debug={'ocr': text, 'web_count': count}), 'debug': debug}
         except Exception:
             tb = traceback.format_exc()
             logging.exception('OCR/text search failed')
             debug['exceptions'].append({'stage': 'ocr', 'trace': tb})
 
         # Nothing matched
-        return {'success': False, 'message': 'no_match', 'debug': debug}
+        return {'success': False, 'message': 'no_match', 'data': _make_result(None, 0.0, None, None, debug)}
 
     except Exception:
         tb = traceback.format_exc()
         logging.exception('unexpected error in process_image')
-        return {'success': False, 'message': 'error', 'debug': {'exceptions': [{'stage': 'unexpected', 'trace': tb}]}}
+        return {'success': False, 'message': 'error', 'data': _make_result(None, 0.0, None, None, {'exceptions': [{'stage': 'unexpected', 'trace': tb}]})}
